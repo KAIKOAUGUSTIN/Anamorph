@@ -32,6 +32,7 @@ python projection_gui.py
   - `projection_window.py` - Full-screen projection output window
   - `property_panel.py` - Property editing UI for selected shape
   - `object_list.py` - Layer list widget showing shapes
+- `styles.py` - Studio Dark Luxury theme with cyan accents; provides `STUDIO_DARK_QSS` stylesheet and `COLORS` palette for consistent UI styling
 
 - `pm/render/` - Rendering subsystem
   - `gl_renderer.py` - QWidget-based renderer using QPainter (not raw OpenGL), handles media texture mapping via affine triangle transforms
