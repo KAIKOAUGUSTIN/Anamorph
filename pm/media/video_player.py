@@ -12,6 +12,8 @@ class VideoPlayer:
     def __init__(self, path: str) -> None:
         self.path = path
         self.cap = cv2.VideoCapture(path)
+        if not self.cap.isOpened():
+            raise IOError(f"Não foi possível abrir o vídeo: {path}")
         self.fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 30.0)
         if self.fps <= 0:
             self.fps = 30.0

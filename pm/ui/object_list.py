@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QListWidget, QListWidgetItem, QVBoxLayout, QWidget, QLabel
+from PySide6.QtWidgets import QListWidget, QListWidgetItem, QVBoxLayout, QWidget, QLabel, QCheckBox
 
 from pm.model.shapes import Shape
 
@@ -16,10 +16,13 @@ class ObjectList(QWidget):
         super().__init__(parent)
         self._updating = False
         self.setMinimumSize(0, 0)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
-        title = QLabel("Objetos")
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        # Panel header
+        title = QLabel("LAYERS")
         title.setObjectName("panelTitle")
         layout.addWidget(title)
 

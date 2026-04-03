@@ -64,6 +64,8 @@ def triangulate_circle(
 ) -> Tuple[List[Tuple[float, float]], List[int]]:
     if segments < 12:
         segments = 12
+    if segments == 0:
+        segments = 12
     cx, cy = center
     rx = max(float(radius_x), 1.0)
     ry = max(float(radius_y), 1.0)
