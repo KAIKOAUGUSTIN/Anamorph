@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -44,18 +44,23 @@ class MainWindow(QMainWindow):
         self._refresh_object_list()
 
     def _build_ui(self) -> None:
-        self.setWindowTitle("Projection Mapper MVP")
+        self.setWindowTitle("PROJECTION MAPPER")
         screen = QGuiApplication.primaryScreen()
         if screen:
             available = screen.availableGeometry()
-            self.resize(min(1400, available.width()), min(800, available.height()))
+            self.resize(min(1600, available.width()), min(900, available.height()))
         else:
-            self.resize(1400, 800)
+            self.resize(1600, 900)
 
+        # Canvas and panels
         self.canvas = CanvasEditor(self.project)
         self.object_list = ObjectList()
+        self.object_list.setObjectName("objectListPanel")
         self.property_panel = PropertyPanel()
+        self.property_panel.setObjectName("propertyPanel")
 
+        self.object_list.setMinimumWidth(200)
+        self.property_panel.setMinimumWidth(260)
         self.object_list.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self.property_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
@@ -63,95 +68,144 @@ class MainWindow(QMainWindow):
         object_scroll.setWidgetResizable(True)
         object_scroll.setFrameShape(QFrame.NoFrame)
         object_scroll.setWidget(self.object_list)
+        object_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         property_scroll = QScrollArea()
         property_scroll.setWidgetResizable(True)
         property_scroll.setFrameShape(QFrame.NoFrame)
         property_scroll.setWidget(self.property_panel)
+        property_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         splitter = QSplitter(Qt.Horizontal)
-        splitter.setChildrenCollapsible(True)
+        splitter.setChildrenCollapsible(False)
         splitter.addWidget(object_scroll)
         splitter.addWidget(self.canvas)
         splitter.addWidget(property_scroll)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([220, 1000, 280])
 
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         layout.addWidget(splitter)
         self.setCentralWidget(container)
 
-        toolbar = QToolBar("Ferramentas")
+        # Toolbar
+        toolbar = QToolBar("Main Toolbar")
         toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(20, 20))
         self.addToolBar(toolbar)
 
-        self.action_select = QAction("Selecionar", self)
-        self.action_polygon = QAction("Polígono", self)
-        self.action_circle = QAction("Círculo", self)
-        self.action_projection = QAction("Abrir Projeção", self)
-        self.action_test_mode = QAction("Modo Teste", self)
-        self.action_test_mode.setCheckable(True)
-        self.action_delete = QAction("Excluir", self)
-        self.action_delete.setShortcuts([QKeySequence.Delete, QKeySequence.Backspace])
-        self.action_delete.setShortcutContext(Qt.ApplicationShortcut)
-        self.addAction(self.action_delete)
+        # Tool actions - make them checkable for exclusive selection
+        self.action_select = QAction("Select", self)
+        self.action_polygon = QAction("Polygon", self)
+        self.action_circle = QAction("Circle", self)
+
+        for action in (self.action_select, self.action_polygon, self.action_circle):
+            action.setCheckable(True)
+        self.action_select.setChecked(True)
+
+        tool_group = QActionGroup(self)
+        tool_group.setExclusive(True)
+        tool_group.addAction(self.action_select)
+        tool_group.addAction(self.action_polygon)
+        tool_group.addAction(self.action_circle)
+
         toolbar.addAction(self.action_select)
         toolbar.addAction(self.action_polygon)
         toolbar.addAction(self.action_circle)
+
         toolbar.addSeparator()
-        self.action_mode_points = QAction("Pontos", self)
-        self.action_mode_scale = QAction("Escala", self)
-        self.action_mode_rotate = QAction("Rotação", self)
+
+        # Edit mode actions
+        self.action_mode_points = QAction("Points", self)
+        self.action_mode_scale = QAction("Scale", self)
+        self.action_mode_rotate = QAction("Rotate", self)
         for action in (self.action_mode_points, self.action_mode_scale, self.action_mode_rotate):
             action.setCheckable(True)
+        self.action_mode_points.setChecked(True)
+
         mode_group = QActionGroup(self)
         mode_group.setExclusive(True)
         mode_group.addAction(self.action_mode_points)
         mode_group.addAction(self.action_mode_scale)
         mode_group.addAction(self.action_mode_rotate)
-        self.action_mode_points.setChecked(True)
+
         toolbar.addAction(self.action_mode_points)
         toolbar.addAction(self.action_mode_scale)
         toolbar.addAction(self.action_mode_rotate)
+
         toolbar.addSeparator()
+
+        # Projection controls
+        self.action_projection = QAction("Project", self)
+        self.action_test_mode = QAction("Test Mode", self)
+        self.action_test_mode.setCheckable(True)
         toolbar.addAction(self.action_projection)
         toolbar.addAction(self.action_test_mode)
 
+        # Spacer for zoom control
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        toolbar.addWidget(spacer)
+
+        # Zoom control
         zoom_widget = QWidget()
         zoom_layout = QHBoxLayout(zoom_widget)
-        zoom_layout.setContentsMargins(8, 0, 0, 0)
-        zoom_layout.setSpacing(6)
-        zoom_label = QLabel("Zoom")
+        zoom_layout.setContentsMargins(12, 0, 12, 0)
+        zoom_layout.setSpacing(8)
+        zoom_label = QLabel("ZOOM")
+        zoom_label.setStyleSheet("color: #707070; font-weight: 600; font-size: 10px; letter-spacing: 1px;")
         self.zoom_slider = ArrowSlider(Qt.Horizontal)
         self.zoom_slider.setRange(25, 400)
         self.zoom_slider.setValue(100)
-        self.zoom_slider.setFixedWidth(140)
+        self.zoom_slider.setFixedWidth(120)
         self.zoom_slider.setSingleStep(5)
         zoom_layout.addWidget(zoom_label)
         zoom_layout.addWidget(self.zoom_slider)
+
         zoom_action = QWidgetAction(self)
         zoom_action.setDefaultWidget(zoom_widget)
-        toolbar.addSeparator()
         toolbar.addAction(zoom_action)
 
-        file_menu = self.menuBar().addMenu("Arquivo")
-        self.action_new = QAction("Novo", self)
-        self.action_open = QAction("Abrir", self)
-        self.action_save = QAction("Salvar", self)
-        self.action_save_as = QAction("Salvar como", self)
+        # Delete action (keyboard shortcut only)
+        self.action_delete = QAction("Delete", self)
+        self.action_delete.setShortcuts([QKeySequence.Delete, QKeySequence.Backspace])
+        self.action_delete.setShortcutContext(Qt.ApplicationShortcut)
+        self.addAction(self.action_delete)
+
+        # Menu bar
+        file_menu = self.menuBar().addMenu("File")
+        self.action_new = QAction("New Project", self)
+        self.action_open = QAction("Open...", self)
+        self.action_save = QAction("Save", self)
+        self.action_save_as = QAction("Save As...", self)
         file_menu.addAction(self.action_new)
         file_menu.addAction(self.action_open)
         file_menu.addAction(self.action_save)
         file_menu.addAction(self.action_save_as)
 
-        settings_menu = self.menuBar().addMenu("Configurações")
-        self.action_select_screen = QAction("Selecionar Tela de Projeção", self)
+        settings_menu = self.menuBar().addMenu("Settings")
+        self.action_select_screen = QAction("Projection Display...", self)
         settings_menu.addAction(self.action_select_screen)
 
-        edit_menu = self.menuBar().addMenu("Editar")
+        edit_menu = self.menuBar().addMenu("Edit")
         edit_menu.addAction(self.action_delete)
-        self.mode_label = QLabel("Modo: Pontos")
+
+        # Status bar with styled mode indicator
+        self.mode_label = QLabel("POINTS")
+        self.mode_label.setStyleSheet("""
+            QLabel {
+                color: #00d4aa;
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 2px;
+                padding: 4px 12px;
+                background: rgba(0, 212, 170, 0.1);
+                border-radius: 3px;
+            }
+        """)
         self.statusBar().addPermanentWidget(self.mode_label)
 
     def _connect_signals(self) -> None:
@@ -187,15 +241,14 @@ class MainWindow(QMainWindow):
         self.object_list.select_shape(shape.id if shape else None)
 
     def _on_edit_mode_changed(self, mode: str) -> None:
+        mode_labels = {"points": "POINTS", "scale": "SCALE", "rotate": "ROTATE"}
         if mode == "points":
             self.action_mode_points.setChecked(True)
-            self.mode_label.setText("Modo: Pontos")
         elif mode == "scale":
             self.action_mode_scale.setChecked(True)
-            self.mode_label.setText("Modo: Escala")
         elif mode == "rotate":
             self.action_mode_rotate.setChecked(True)
-            self.mode_label.setText("Modo: Rotação")
+        self.mode_label.setText(mode_labels.get(mode, mode.upper()))
 
     def _on_list_selection(self, shape_id: str) -> None:
         self.canvas.select_shape(shape_id)
@@ -215,12 +268,12 @@ class MainWindow(QMainWindow):
 
     def _set_tool(self, tool: str) -> None:
         self.canvas.set_tool(tool)
-        self.statusBar().showMessage(
-            "Clique na tela para criar um polígono e ajuste pelos vértices." if tool == "polygon"
-            else "Clique na tela para criar o círculo (4 pontos) e ajuste pelos vértices." if tool == "circle"
-            else "Seleção ativa. Arraste sem tecla para mover a visão, segure Shift para mover o objeto.",
-            3000,
-        )
+        messages = {
+            "polygon": "Click on canvas to create polygon, adjust via vertices",
+            "circle": "Click on canvas to create circle, adjust via handles",
+            "select": "Selection active. Drag to pan, Shift+drag to move shapes"
+        }
+        self.statusBar().showMessage(messages.get(tool, ""), 3000)
 
     def _refresh_object_list(self) -> None:
         selected_id = None
@@ -237,26 +290,26 @@ class MainWindow(QMainWindow):
         self._set_project(Project())
 
     def _open_project(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Abrir projeto", "", "Projection Map (*.pmap.json)")
+        path, _ = QFileDialog.getOpenFileName(self, "Open Project", "", "Projection Map (*.pmap.json)")
         if not path:
             return
         try:
             project = load_project(path)
         except Exception as exc:
-            QMessageBox.critical(self, "Erro", f"Falha ao abrir projeto: {exc}")
+            QMessageBox.critical(self, "Error", f"Failed to open project: {exc}")
             return
         self._set_project(project)
 
     def _save_project(self, save_as: bool = False) -> None:
         path = self.project.path
         if save_as or not path:
-            path, _ = QFileDialog.getSaveFileName(self, "Salvar projeto", "", "Projection Map (*.pmap.json)")
-            if not path:
-                return
+            path, _ = QFileDialog.getSaveFileName(self, "Save Project", "", "Projection Map (*.pmap.json)")
+        if not path:
+            return
         try:
             save_project(self.project, path)
         except Exception as exc:
-            QMessageBox.critical(self, "Erro", f"Falha ao salvar projeto: {exc}")
+            QMessageBox.critical(self, "Error", f"Failed to save project: {exc}")
 
     def _set_project(self, project: Project) -> None:
         try:
@@ -296,7 +349,7 @@ class MainWindow(QMainWindow):
         screens = QGuiApplication.screens()
         items = [f"{i}: {screen.name()}" for i, screen in enumerate(screens)]
         current = self.selected_screen_index or 0
-        value, ok = QInputDialog.getItem(self, "Selecionar tela", "Tela de projeção:", items, current, False)
+        value, ok = QInputDialog.getItem(self, "Projection Display", "Select display:", items, current, False)
         if ok and value:
             index = int(value.split(":")[0])
             self.selected_screen_index = index
@@ -312,8 +365,8 @@ class MainWindow(QMainWindow):
         screen = screens[index] if screens else None
         if not self.projection_window:
             self.projection_window = ProjectionWindow(self.project, self)
-        self.projection_window.open_on_screen(screen)
-        self.projection_window.renderer.update()
+            self.projection_window.open_on_screen(screen)
+            self.projection_window.renderer.update()
         if screen:
             self._apply_screen_resolution(screen)
 

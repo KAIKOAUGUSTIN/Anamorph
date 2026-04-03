@@ -23,17 +23,22 @@ class CanvasScene(QGraphicsScene):
         super().__init__()
         self.project = project
         self.grid_size = 20
-        self.workspace_background = QColor(16, 16, 18)
+        self.workspace_background = QColor(10, 10, 12)
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
         super().drawBackground(painter, rect)
+        # Dark workspace background
         painter.fillRect(rect, self.workspace_background)
+
         canvas_rect = QRectF(0, 0, self.project.canvas.width, self.project.canvas.height)
+
+        # Canvas area with subtle gradient
         painter.fillRect(canvas_rect, QColor(*self.project.canvas.background_color))
 
+        # Refined grid
         painter.save()
         painter.setClipRect(canvas_rect)
-        painter.setPen(QPen(QColor(36, 36, 42), 1))
+        painter.setPen(QPen(QColor(26, 26, 30), 1))
         left = int(canvas_rect.left()) - (int(canvas_rect.left()) % self.grid_size)
         top = int(canvas_rect.top()) - (int(canvas_rect.top()) % self.grid_size)
         right = int(canvas_rect.right())
@@ -44,13 +49,30 @@ class CanvasScene(QGraphicsScene):
             painter.drawLine(canvas_rect.left(), y, canvas_rect.right(), y)
         painter.restore()
 
-        painter.setPen(QPen(QColor(120, 120, 130), 2))
+        # Accent border for canvas
+        painter.setPen(QPen(QColor(42, 42, 46), 2))
         painter.drawRect(canvas_rect)
+
+        # Corner markers
+        corner_size = 12
+        painter.setPen(QPen(QColor(0, 212, 170), 2))
+        # Top-left
+        painter.drawLine(canvas_rect.left(), canvas_rect.top(), canvas_rect.left() + corner_size, canvas_rect.top())
+        painter.drawLine(canvas_rect.left(), canvas_rect.top(), canvas_rect.left(), canvas_rect.top() + corner_size)
+        # Top-right
+        painter.drawLine(canvas_rect.right() - corner_size, canvas_rect.top(), canvas_rect.right(), canvas_rect.top())
+        painter.drawLine(canvas_rect.right(), canvas_rect.top(), canvas_rect.right(), canvas_rect.top() + corner_size)
+        # Bottom-left
+        painter.drawLine(canvas_rect.left(), canvas_rect.bottom() - corner_size, canvas_rect.left(), canvas_rect.bottom())
+        painter.drawLine(canvas_rect.left(), canvas_rect.bottom(), canvas_rect.left() + corner_size, canvas_rect.bottom())
+        # Bottom-right
+        painter.drawLine(canvas_rect.right() - corner_size, canvas_rect.bottom(), canvas_rect.right(), canvas_rect.bottom())
+        painter.drawLine(canvas_rect.right(), canvas_rect.bottom() - corner_size, canvas_rect.right(), canvas_rect.bottom())
 
 
 class VertexHandle(QGraphicsEllipseItem):
     def __init__(self, owner, index: int, on_moved, snap_func, on_pressed=None, on_released=None) -> None:
-        super().__init__(-6, -6, 12, 12)
+        super().__init__(-5, -5, 10, 10)
         self.owner = owner
         self.index = index
         self.on_moved = on_moved
@@ -59,8 +81,9 @@ class VertexHandle(QGraphicsEllipseItem):
         self.on_released = on_released
         self._block = False
         self._restore_parent_move: Optional[bool] = None
-        self.setBrush(QBrush(QColor(240, 240, 240)))
-        self.setPen(QPen(QColor(20, 20, 20), 1))
+        # Refined handle styling - cyan accent
+        self.setBrush(QBrush(QColor(0, 212, 170)))
+        self.setPen(QPen(QColor(0, 136, 102), 1.5))
         self.setFlags(
             QGraphicsItem.ItemIsMovable
             | QGraphicsItem.ItemSendsGeometryChanges
@@ -150,7 +173,7 @@ class PolygonItem(QGraphicsPathItem):
                     painter.drawLine(p1[0], p1[1], p2[0], p2[1])
 
         if option.state & QStyle.State_Selected:
-            pen = QPen(QColor(255, 220, 0, 200), 1.0, Qt.DashLine)
+            pen = QPen(QColor(0, 212, 170, 220), 2.0, Qt.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(self.path())
@@ -217,18 +240,18 @@ class CircleItem(QGraphicsEllipseItem):
         painter.drawEllipse(rect)
 
         if option.state & QStyle.State_Selected:
-            pen = QPen(QColor(255, 220, 0, 200), 1.0, Qt.DashLine)
+            pen = QPen(QColor(0, 212, 170, 220), 2.0, Qt.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawEllipse(rect)
 
-        # orientation hint (rotacao)
+        # Orientation line
         cx, cy = self.model.center
         r = max(self.model.radius_x, self.model.radius_y, 1.0)
         angle = getattr(self, "handle_angle", -math.pi / 2.0)
         x = cx + math.cos(angle) * r
         y = cy + math.sin(angle) * r
-        painter.setPen(QPen(QColor(240, 240, 120, 180), 1.0))
+        painter.setPen(QPen(QColor(0, 212, 170, 120), 1.0))
         painter.drawLine(cx, cy, x, y)
 
     def itemChange(self, change, value):
@@ -648,8 +671,9 @@ class CanvasEditor(QGraphicsView):
         scene_pos = owner.mapToScene(pos)
         nx = scene_pos.x() - cx
         ny = scene_pos.y() - cy
-        scale_x = nx / sx if abs(sx) > 1e-4 else 1.0
-        scale_y = ny / sy if abs(sy) > 1e-4 else 1.0
+        EPSILON = 1e-4
+        scale_x = nx / sx if abs(sx) > EPSILON else 1.0
+        scale_y = ny / sy if abs(sy) > EPSILON else 1.0
         scale_x = max(0.1, abs(scale_x))
         scale_y = max(0.1, abs(scale_y))
         new_points = []
@@ -914,9 +938,9 @@ class CanvasEditor(QGraphicsView):
             if min_dist is None or dist < min_dist:
                 min_dist = dist
                 insert_index = idx
-        if min_dist is None or min_dist > 12.0:
+        if min_dist is None or min_dist > 12.0 or insert_index is None:
             return False
-        insert_at = (insert_index + 1) if insert_index is not None else len(points)
+        insert_at = insert_index + 1
         points.insert(insert_at, (point.x(), point.y()))
         item.model.points = points
         edges = list(item.model.edges)

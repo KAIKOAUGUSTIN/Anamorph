@@ -92,10 +92,20 @@ class GLRenderer(QWidget):
             self._draw_strokes(painter)
 
             if self.project.ui_state.get("test_mode"):
-                pen = QPen(QColor(255, 220, 0), 6)
+                pen = QPen(QColor(0, 212, 170), 4)
                 painter.setPen(pen)
                 painter.setBrush(Qt.NoBrush)
                 painter.drawRect(0, 0, canvas_w, canvas_h)
+                # Corner markers for test mode
+                marker_size = min(canvas_w, canvas_h) // 10
+                painter.drawLine(0, 0, marker_size, 0)
+                painter.drawLine(0, 0, 0, marker_size)
+                painter.drawLine(canvas_w - marker_size, 0, canvas_w, 0)
+                painter.drawLine(canvas_w, 0, canvas_w, marker_size)
+                painter.drawLine(0, canvas_h - marker_size, 0, canvas_h)
+                painter.drawLine(0, canvas_h, marker_size, canvas_h)
+                painter.drawLine(canvas_w - marker_size, canvas_h, canvas_w, canvas_h)
+                painter.drawLine(canvas_w, canvas_h - marker_size, canvas_w, canvas_h)
         finally:
             painter.end()
 
@@ -148,10 +158,10 @@ class GLRenderer(QWidget):
                 scale = max(box_w / media_w, box_h / media_h)
             content_w = media_w * scale
             content_h = media_h * scale
-        offset_x = (box_w - content_w) / 2.0
-        offset_y = (box_h - content_h) / 2.0
-        if content_w <= 0 or content_h <= 0:
-            content_w, content_h = box_w, box_h
+            offset_x = (box_w - content_w) / 2.0
+            offset_y = (box_h - content_h) / 2.0
+            if content_w <= 0 or content_h <= 0:
+                content_w, content_h = box_w, box_h
 
         uvs: List[Tuple[float, float]] = []
         for x, y in points:
@@ -181,7 +191,7 @@ class GLRenderer(QWidget):
         for u, v in uvs:
             u += dx
             v += dy
-            if angle != 0.0:
+            if abs(angle) > 1e-9:
                 x = u - 0.5
                 y = v - 0.5
                 u = (x * cos_a - y * sin_a) + 0.5
