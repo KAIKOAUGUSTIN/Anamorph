@@ -12,6 +12,9 @@ This is a Projection Mapping MVP application built with Python and PySide6. It a
 # Install dependencies
 pip install -r requirements.txt
 
+# On Windows, activate virtual environment first:
+.venv\Scripts\activate
+
 # Run the application
 python projection_gui.py
 ```
@@ -19,6 +22,9 @@ python projection_gui.py
 ## Architecture
 
 ### Module Structure
+
+- `projection_gui.py` - Thin CLI entry point, delegates to `pm.app_main.run()`
+- `pm/app_main.py` - Application initialization: QApplication setup, high DPI config, theme application
 
 - `pm/model/` - Data models (dataclasses, no Qt dependency)
   - `project.py` - Project root with CanvasSettings, shape list, media library; emits `changed` signal via QObject inheritance
@@ -33,6 +39,7 @@ python projection_gui.py
   - `property_panel.py` - Property editing UI for selected shape
   - `object_list.py` - Layer list widget showing shapes
 - `styles.py` - Studio Dark Luxury theme with cyan accents; provides `STUDIO_DARK_QSS` stylesheet and `COLORS` palette for consistent UI styling
+- `widgets.py` - Custom keyboard-friendly widgets: `ArrowSlider`, `ArrowSpinBox` for arrow key navigation
 
 - `pm/render/` - Rendering subsystem
   - `gl_renderer.py` - QWidget-based renderer using QPainter (not raw OpenGL), handles media texture mapping via affine triangle transforms
@@ -72,3 +79,24 @@ Projects saved as JSON with `.pmap.json` extension containing:
 ### Threading Notes
 
 VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GLRenderer) retrieves frames via `get_frame()`. Cleanup handled in renderer's `cleanup()` method.
+
+## User Interface
+
+### Toolbar Actions
+- **Points/Scale/Rotate** - Edit mode switching (toolbar buttons)
+- **Polygon/Circle** - Add new shapes
+- **Project** - Toggle fullscreen projection to selected screen
+- **Screen dropdown** - Select target display for projection
+
+### Keyboard Shortcuts
+- `Delete` / `Backspace` - Remove selected shape
+- `Escape` - Close fullscreen projection window
+
+### Supported Media Formats
+- **Images:** PNG, JPG, JPEG, BMP
+- **Videos:** MP4, MOV, AVI, MKV
+
+## Notes
+
+- **PyOpenGL** is listed in requirements but unused - renderer uses QPainter, not raw OpenGL
+- **No tests** - Project currently has no test suite
