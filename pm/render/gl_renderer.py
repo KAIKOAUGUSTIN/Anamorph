@@ -3,23 +3,26 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import math
 import time
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from OpenGL.GL import (
-    GL_ARRAY_BUFFER, GL_BLEND, GL_COLOR_BUFFER_BIT, GL_DYNAMIC_DRAW,
-    GL_ELEMENT_ARRAY_BUFFER, GL_FLOAT, GL_LINEAR, GL_NO_ERROR,
-    GL_POSITION, GL_REPEAT, GL_RGBA, GL_STATIC_DRAW, GL_TEXTURE0,
-    GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_FILTER,
+    GL_ARRAY_BUFFER, GL_BLEND, GL_COLOR_BUFFER_BIT, GL_COMPILE_STATUS,
+    GL_DYNAMIC_DRAW, GL_ELEMENT_ARRAY_BUFFER, GL_FLOAT, GL_FRAGMENT_SHADER,
+    GL_LINEAR, GL_LINES, GL_LINK_STATUS, GL_NO_ERROR,
+    GL_POSITION, GL_REPEAT, GL_RGBA, GL_SRC_ALPHA, GL_STATIC_DRAW,
+    GL_TEXTURE0, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_FILTER,
     GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TRIANGLES, GL_UNSIGNED_INT,
+    GL_VERTEX_SHADER, GL_ONE_MINUS_SRC_ALPHA,
     glActiveTexture, glAttachShader, glBindBuffer, glBindTexture,
     glBindVertexArray, glBlendFunc, glBufferData, glClear, glClearColor,
     glCompileShader, glCreateProgram, glCreateShader, glDeleteBuffers,
     glDeleteProgram, glDeleteShader, glDeleteTextures, glDeleteVertexArrays,
     glDisableVertexAttribArray, glDrawElements, glEnable, glEnableVertexAttribArray,
- glGenBuffers, glGenTextures, glGenVertexArrays, glGetAttribLocation,
+    glGenBuffers, glGenTextures, glGenVertexArrays, glGetAttribLocation,
     glGetError, glGetProgramInfoLog, glGetProgramiv, glGetShaderInfoLog,
     glGetShaderiv, glGetUniformLocation, glLinkProgram, glShaderSource,
     glTexImage2D, glTexParameteri, glUniform1f, glUniform1i, glUniform2f,
@@ -42,6 +45,8 @@ from pm.render.shaders import (
     FRAGMENT_SHADER_SOLID, FRAGMENT_SHADER_STROKE, FRAGMENT_SHADER_TEXTURE,
     VERTEX_SHADER,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class GLRenderer(QOpenGLWidget):
@@ -108,11 +113,11 @@ class GLRenderer(QOpenGLWidget):
         """Initialize OpenGL resources."""
         try:
             # Compile shaders
-            vertex_shader = self._compile_shader(VERTEX_SHADER)
+            vertex_shader = self._compile_shader(VERTEX_SHADER, GL_VERTEX_SHADER)
 
-            frag_texture = self._compile_shader(FRAGMENT_SHADER_TEXTURE)
-            frag_solid = self._compile_shader(FRAGMENT_SHADER_SOLID)
-            frag_stroke = self._compile_shader(FRAGMENT_SHADER_STROKE)
+            frag_texture = self._compile_shader(FRAGMENT_SHADER_TEXTURE, GL_FRAGMENT_SHADER)
+            frag_solid = self._compile_shader(FRAGMENT_SHADER_SOLID, GL_FRAGMENT_SHADER)
+            frag_stroke = self._compile_shader(FRAGMENT_SHADER_STROKE, GL_FRAGMENT_SHADER)
 
             self._program_texture = self._link_program(vertex_shader, frag_texture)
             self._program_solid = self._link_program(vertex_shader, frag_solid)
@@ -148,12 +153,12 @@ class GLRenderer(QOpenGLWidget):
 
             # Enable blending
             glEnable(GL_BLEND)
-            glBlendFunc(770, 771)  # GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
             self._gl_initialized = True
 
         except Exception as e:
-            print(f"OpenGL initialization error: {e}")
+            logger.error("OpenGL initialization error: %s", e)
 
     def resizeGL(self, w: int, h: int) -> None:
         """Handle resize."""
@@ -185,7 +190,7 @@ class GLRenderer(QOpenGLWidget):
             self._render_strokes(canvas_w, canvas_h)
 
         except Exception as e:
-            print(f"Render error: {e}")
+            logger.error("Render error: %s", e)
 
     def _render_shape(self, shape: Shape, canvas_w: float, canvas_h: float, now: float) -> None:
         """Render a single shape."""
@@ -208,12 +213,10 @@ class GLRenderer(QOpenGLWidget):
         opacity = max(0.0, min(1.0, shape.opacity * pulse_factor * strobe_factor))
 
         # Get media texture or render solid
-        media_image = self._get_media_image(shape.media)
-        if media_image:
-            tex_id = self._image_to_texture(media_image)
-            if tex_id:
-                uvs = self._compute_uvs(points, media_image, shape.media)
-                self._draw_textured_shape(points, uvs, indices, tex_id, opacity, shape, now, canvas_w, canvas_h)
+        tex_id, tex_size = self._get_or_create_texture(shape.media)
+        if tex_id:
+            uvs = self._compute_uvs_from_size(points, tex_size, shape.media)
+            self._draw_textured_shape(points, uvs, indices, tex_id, opacity, shape, now, canvas_w, canvas_h)
         else:
             # Solid color fill
             fill = shape.fill_color
@@ -390,7 +393,7 @@ class GLRenderer(QOpenGLWidget):
         glUniform4f(loc, color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, alpha)
 
         glBindVertexArray(self._vao)
-        glDrawElements(GL_TRIANGLES, 2, GL_UNSIGNED_INT, None)  # Use GL_LINES would be better but using triangles for consistency
+        glDrawElements(GL_LINES, 2, GL_UNSIGNED_INT, None)
 
     def _shape_geometry(self, shape: Shape) -> Tuple[List[Tuple[float, float]], List[int]]:
         """Get triangulated geometry for a shape."""
@@ -482,34 +485,111 @@ class GLRenderer(QOpenGLWidget):
 
         return [((x - minx) / box_w, (y - miny) / box_h) for x, y in points]
 
-    def _get_media_image(self, media: MediaRef) -> Optional[QImage]:
-        """Get current frame from media."""
+    def _get_or_create_texture(self, media: MediaRef) -> Tuple[Optional[int], Tuple[int, int]]:
+        """Get or create a texture for media.
+
+        Returns:
+            Tuple of (texture_id, (width, height)) or (None, (0, 0)) if no media.
+        """
         if not media or not media.kind or not media.path:
-            return None
+            return None, (0, 0)
 
         if media.kind == "image":
-            # Return QImage for texture conversion
-            cached = self._image_cache.get(media.path)
-            if cached:
-                # Already a texture, return None to signal we use the cache
-                return None
+            # Check cache first
+            cached_tex = self._image_cache.get(media.path)
+            if cached_tex:
+                # Return cached texture ID
+                # Load image to get dimensions (only needed for UV calculation)
+                img = self._load_image(media.path)
+                if img:
+                    return cached_tex, (img.width(), img.height())
+                return cached_tex, (1, 1)
+
+            # Load image and create texture
             img = self._load_image(media.path)
-            if img:
-                return img
+            if not img:
+                return None, (0, 0)
+
+            tex_id = self._create_texture_from_qimage(img)
+            if tex_id:
+                self._image_cache[media.path] = tex_id
+                return tex_id, (img.width(), img.height())
 
         elif media.kind == "video":
+            # Video textures are not cached (frames change)
             player = self._video_players.get(media.path)
             if not player:
                 player = VideoPlayer(media.path)
                 player.start()
                 self._video_players[media.path] = player
 
-            frame, _size = player.get_frame()
+            frame, size = player.get_frame()
             if frame is not None:
                 qimg = QImage(frame.data, frame.shape[1], frame.shape[0], frame.strides[0], QImage.Format_RGB888).copy()
-                return qimg.convertToFormat(QImage.Format_RGBA8888)
+                qimg = qimg.convertToFormat(QImage.Format_RGBA8888)
+                tex_id = self._create_texture_from_qimage(qimg)
+                return tex_id, size
 
-        return None
+        return None, (0, 0)
+
+    def _create_texture_from_qimage(self, image: QImage) -> Optional[int]:
+        """Create an OpenGL texture from a QImage."""
+        ptr = image.constBits()
+        ptr.setsize(image.sizeInBytes())
+
+        tex_id = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, tex_id)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image.width(), image.height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, ptr)
+
+        return tex_id
+
+    def _compute_uvs_from_size(
+        self,
+        points: List[Tuple[float, float]],
+        tex_size: Tuple[int, int],
+        media: MediaRef,
+    ) -> List[Tuple[float, float]]:
+        """Compute UV coordinates based on texture size."""
+        if not points:
+            return []
+
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        minx, miny, maxx, maxy = min(xs), min(ys), max(xs), max(ys)
+        box_w = max(maxx - minx, 1e-5)
+        box_h = max(maxy - miny, 1e-5)
+
+        media_w = max(tex_size[0], 1)
+        media_h = max(tex_size[1], 1)
+        mode = (media.fit_mode or "stretch").lower()
+
+        if mode == "warp":
+            return self._compute_warp_uvs(points, minx, miny, box_w, box_h)
+
+        if mode == "stretch":
+            content_w, content_h = box_w, box_h
+            offset_x, offset_y = 0.0, 0.0
+        else:
+            if mode == "contain":
+                scale = min(box_w / media_w, box_h / media_h)
+            else:  # cover
+                scale = max(box_w / media_w, box_h / media_h)
+            content_w = media_w * scale
+            content_h = media_h * scale
+            offset_x = (box_w - content_w) / 2.0
+            offset_y = (box_h - content_h) / 2.0
+
+        uvs: List[Tuple[float, float]] = []
+        for x, y in points:
+            u = (x - minx - offset_x) / content_w if content_w > 0 else 0.0
+            v = (y - miny - offset_y) / content_h if content_h > 0 else 0.0
+            uvs.append((max(0.0, min(1.0, u)), max(0.0, min(1.0, v))))
+
+        return uvs
 
     def _load_image(self, path: str) -> Optional[QImage]:
         """Load an image file."""
@@ -521,37 +601,19 @@ class GLRenderer(QOpenGLWidget):
         except Exception:
             return None
 
-    def _image_to_texture(self, image: QImage) -> int:
-        """Convert QImage to OpenGL texture."""
-        # Get raw pixel data
-        ptr = image.constBits()
-        ptr.setsize(image.sizeInBytes())
+    def _compile_shader(self, source: str, shader_type: int) -> int:
+        """Compile a shader from source.
 
-        # Create texture
-        tex_id = glGenTextures(1)
-        glBindTexture(GL_TEXTURE_2D, tex_id)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
-
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image.width(), image.height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, ptr)
-
-        return tex_id
-
-    def _compile_shader(self, source: str) -> int:
-        """Compile a shader from source."""
-        if "vertex" in source.lower() or "in_pos" in source:
-            shader_type = 0x8B31  # GL_VERTEX_SHADER
-        else:
-            shader_type = 0x8B30  # GL_FRAGMENT_SHADER
-
+        Args:
+            source: GLSL source code
+            shader_type: GL_VERTEX_SHADER or GL_FRAGMENT_SHADER
+        """
         shader = glCreateShader(shader_type)
         glShaderSource(shader, source)
         glCompileShader(shader)
 
         result = ctypes.c_int()
-        glGetShaderiv(shader, 0x8B82, result)  # GL_COMPILE_STATUS
+        glGetShaderiv(shader, GL_COMPILE_STATUS, result)
         if not result.value:
             error = glGetShaderInfoLog(shader).decode()
             raise RuntimeError(f"Shader compilation error: {error}")
@@ -566,7 +628,7 @@ class GLRenderer(QOpenGLWidget):
         glLinkProgram(program)
 
         result = ctypes.c_int()
-        glGetProgramiv(program, 0x8B82, result)  # GL_LINK_STATUS
+        glGetProgramiv(program, GL_LINK_STATUS, result)
         if not result.value:
             error = glGetProgramInfoLog(program).decode()
             raise RuntimeError(f"Program link error: {error}")

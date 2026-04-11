@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QStandardPaths
 from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
@@ -56,11 +56,12 @@ class MainWindow(QMainWindow):
         self._refresh_object_list()
 
     def _get_workspace_base_path(self) -> str:
-        """Get base path for workspace storage."""
-        import os
+        """Get base path for workspace storage using QStandardPaths."""
         from pathlib import Path
-        # Store workspaces in user's app data
-        app_data = os.getenv('APPDATA', str(Path.home()))
+        # Use QStandardPaths for cross-platform compatibility
+        app_data = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
+        if not app_data:
+            app_data = QStandardPaths.writableLocation(QStandardPaths.HomeLocation)
         base = Path(app_data) / "ProjectionMapper"
         base.mkdir(parents=True, exist_ok=True)
         return str(base)
@@ -364,6 +365,49 @@ class MainWindow(QMainWindow):
 
     def _switch_to_screen(self, screen_index: int, screen_id: str, screen_name: str) -> None:
         """Switch to a different screen workspace."""
+        # Check for unsaved changes
+        if self._has_unsaved_changes():
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Unsaved Changes")
+            msg.setText(f"You have unsaved changes in '{self.project.name}'. Switch screens anyway?")
+            msg.setIcon(QMessageBox.Warning)
+            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
+            msg.setDefaultButton(QMessageBox.Cancel)
+            msg.setStyleSheet("""
+                QMessageBox {
+                    background-color: #1a1a1a;
+                }
+                QMessageBox QLabel {
+                    color: #ffffff;
+                    font-size: 13px;
+                }
+                QPushButton {
+                    background-color: #2a2a2a;
+                    color: #00d4aa;
+                    border: 1px solid #3a3a3a;
+                    padding: 8px 20px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    min-width: 80px;
+                }
+                QPushButton:hover {
+                    background-color: #3a3a3a;
+                    border-color: #00d4aa;
+                }
+            """)
+            if msg.exec() == QMessageBox.Cancel:
+                # Revert combo box to current screen
+                current_id = self.workspace_manager.get_current_screen_id()
+                if current_id:
+                    for i in range(self.screen_combo.count()):
+                        data = self.screen_combo.itemData(i)
+                        if data and data[1] == current_id:
+                            self.screen_combo.blockSignals(True)
+                            self.screen_combo.setCurrentIndex(i)
+                            self.screen_combo.blockSignals(False)
+                            break
+                return
+
         # Get the geometry from available screens
         screens = self.workspace_manager.get_available_screens()
         geometry = None
@@ -384,6 +428,14 @@ class MainWindow(QMainWindow):
             self.canvas.fit_to_canvas()
 
         self.selected_screen_index = screen_index
+
+    def _has_unsaved_changes(self) -> bool:
+        """Check if current project has unsaved changes."""
+        # If project has shapes but no path, it's unsaved
+        if len(self.project.shapes) > 0 and not self.project.path:
+            return True
+        # Could add more sophisticated tracking here if needed
+        return False
 
     def _on_workspace_changed(self, screen_id: str) -> None:
         """Handle workspace change signal."""
