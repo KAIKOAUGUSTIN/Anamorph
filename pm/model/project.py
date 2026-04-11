@@ -42,6 +42,7 @@ class Project(QObject):
         self.media_library: List[str] = []
         self.ui_state: Dict[str, Any] = {"last_projection_screen_id": None, "test_mode": False}
         self.path: Optional[str] = None
+        self.name: str = "Untitled"
 
     def touch(self) -> None:
         self.changed.emit()
@@ -62,6 +63,7 @@ class Project(QObject):
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "name": self.name,
             "canvas": self.canvas.to_dict(),
             "shapes": [shape_to_dict(s) for s in self.shapes],
             "media_library": list(self.media_library),
@@ -71,6 +73,7 @@ class Project(QObject):
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "Project":
         project = Project()
+        project.name = data.get("name", "Untitled")
         project.canvas = CanvasSettings.from_dict(data.get("canvas", {}))
         project.shapes = [shape_from_dict(s) for s in data.get("shapes", [])]
         project.media_library = list(data.get("media_library", []))
