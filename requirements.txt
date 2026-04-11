@@ -4,3 +4,5 @@ opencv-python>=4.9
 mapbox_earcut>=1.0
 Pillow>=10.0
 PyOpenGL>=3.1
+
+
