@@ -197,7 +197,7 @@ class PropertyPanel(QWidget):
         fit_label = QLabel("Fit Mode")
         fit_label.setStyleSheet("color: #808080;")
         self.fit_mode = QComboBox()
-        self.fit_mode.addItems(["stretch", "contain", "cover"])
+        self.fit_mode.addItems(["stretch", "contain", "cover", "warp"])
         self.fit_mode.setFixedWidth(100)
         self.fit_mode.currentTextChanged.connect(self._on_fit_mode_changed)
         fit_layout.addWidget(fit_label)

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Dict, Optional
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QStandardPaths
 from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QFrame,
     QInputDialog,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
 from pm.io.project_io import load_project, save_project
 from pm.model.project import Project
 from pm.model.shapes import Shape
+from pm.model.workspace_manager import WorkspaceManager
 from pm.ui.canvas_editor import CanvasEditor
 from pm.ui.object_list import ObjectList
 from pm.ui.property_panel import PropertyPanel
@@ -34,14 +36,35 @@ from pm.ui.widgets import ArrowSlider
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.project = Project()
-        self.projection_window: Optional[ProjectionWindow] = None
+        # Workspace manager for handling multiple screens
+        self.workspace_manager = WorkspaceManager(self)
+        self.workspace_manager.set_base_path(self._get_workspace_base_path())
+
+        # Track projection windows per screen
+        self._projection_windows: Dict[str, ProjectionWindow] = {}
+
+        # Track known screens to detect new ones
+        self._known_screens: set = set()
+
+        self.workspace_manager.workspace_changed.connect(self._on_workspace_changed)
+
         self.selected_screen_index: Optional[int] = None
 
         self._build_ui()
         self._connect_signals()
-        self._auto_select_screen()
+        self._initialize_screens()
         self._refresh_object_list()
+
+    def _get_workspace_base_path(self) -> str:
+        """Get base path for workspace storage using QStandardPaths."""
+        from pathlib import Path
+        # Use QStandardPaths for cross-platform compatibility
+        app_data = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
+        if not app_data:
+            app_data = QStandardPaths.writableLocation(QStandardPaths.HomeLocation)
+        base = Path(app_data) / "ProjectionMapper"
+        base.mkdir(parents=True, exist_ok=True)
+        return str(base)
 
     def _build_ui(self) -> None:
         self.setWindowTitle("PROJECTION MAPPER")
@@ -51,6 +74,9 @@ class MainWindow(QMainWindow):
             self.resize(min(1600, available.width()), min(900, available.height()))
         else:
             self.resize(1600, 900)
+
+        # Get initial project from workspace manager
+        self.project = Project()
 
         # Canvas and panels
         self.canvas = CanvasEditor(self.project)
@@ -104,7 +130,7 @@ class MainWindow(QMainWindow):
 
         for action in (self.action_select, self.action_polygon, self.action_circle):
             action.setCheckable(True)
-        self.action_select.setChecked(True)
+            self.action_select.setChecked(True)
 
         tool_group = QActionGroup(self)
         tool_group.setExclusive(True)
@@ -124,7 +150,7 @@ class MainWindow(QMainWindow):
         self.action_mode_rotate = QAction("Rotate", self)
         for action in (self.action_mode_points, self.action_mode_scale, self.action_mode_rotate):
             action.setCheckable(True)
-        self.action_mode_points.setChecked(True)
+            self.action_mode_points.setChecked(True)
 
         mode_group = QActionGroup(self)
         mode_group.setExclusive(True)
@@ -135,6 +161,34 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.action_mode_points)
         toolbar.addAction(self.action_mode_scale)
         toolbar.addAction(self.action_mode_rotate)
+
+        toolbar.addSeparator()
+
+        # Screen selector dropdown (NEW)
+        self.screen_combo = QComboBox()
+        self.screen_combo.setFixedWidth(180)
+        self.screen_combo.setStyleSheet("""
+            QComboBox {
+                background: #2a2a2a;
+                color: #00d4aa;
+                border: 1px solid #3a3a3a;
+                padding: 4px 8px;
+                border-radius: 3px;
+            }
+            QComboBox:hover {
+                border-color: #00d4aa;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox QAbstractItemView {
+                background: #2a2a2a;
+                color: #ffffff;
+                selection-background-color: #00d4aa;
+            }
+        """)
+        toolbar.addWidget(self.screen_combo)
 
         toolbar.addSeparator()
 
@@ -187,8 +241,8 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.action_save_as)
 
         settings_menu = self.menuBar().addMenu("Settings")
-        self.action_select_screen = QAction("Projection Display...", self)
-        settings_menu.addAction(self.action_select_screen)
+        self.action_rescan = QAction("Rescan Screens", self)
+        settings_menu.addAction(self.action_rescan)
 
         edit_menu = self.menuBar().addMenu("Edit")
         edit_menu.addAction(self.action_delete)
@@ -208,21 +262,33 @@ class MainWindow(QMainWindow):
         """)
         self.statusBar().addPermanentWidget(self.mode_label)
 
+        # Project name indicator
+        self.project_label = QLabel("PROJECT: Untitled")
+        self.project_label.setStyleSheet("""
+            QLabel {
+                color: #707070;
+                font-size: 10px;
+                font-weight: 600;
+                letter-spacing: 1px;
+            }
+        """)
+        self.statusBar().addWidget(self.project_label)
+
     def _connect_signals(self) -> None:
         self.action_select.triggered.connect(lambda _checked=False: self._set_tool("select"))
         self.action_polygon.triggered.connect(lambda _checked=False: self._set_tool("polygon"))
         self.action_circle.triggered.connect(lambda _checked=False: self._set_tool("circle"))
-        self.action_projection.triggered.connect(lambda _checked=False: self._open_projection())
+        self.action_projection.triggered.connect(lambda _checked=False: self._toggle_projection())
         self.zoom_slider.valueChanged.connect(self._on_zoom_changed)
         self.action_test_mode.toggled.connect(self._on_test_mode_toggled)
         self.action_delete.triggered.connect(lambda _checked=False: self._delete_selected_shapes())
+        self.action_rescan.triggered.connect(lambda _checked=False: self._rescan_screens())
 
         self.action_new.triggered.connect(lambda _checked=False: self._new_project())
         self.action_open.triggered.connect(lambda _checked=False: self._open_project())
         self.action_save.triggered.connect(lambda _checked=False: self._save_project())
         self.action_save_as.triggered.connect(lambda _checked=False: self._save_project(save_as=True))
 
-        self.action_select_screen.triggered.connect(lambda _checked=False: self._select_projection_screen())
         self.action_mode_points.triggered.connect(lambda _checked=False: self.canvas.set_edit_mode("points"))
         self.action_mode_scale.triggered.connect(lambda _checked=False: self.canvas.set_edit_mode("scale"))
         self.action_mode_rotate.triggered.connect(lambda _checked=False: self.canvas.set_edit_mode("rotate"))
@@ -232,9 +298,161 @@ class MainWindow(QMainWindow):
         self.canvas.edit_mode_changed.connect(self._on_edit_mode_changed)
         self.object_list.shape_selected.connect(self._on_list_selection)
         self.object_list.visibility_changed.connect(self._on_visibility_change)
+
+        # Connect screen addition/removal signals (use instance)
+        app = QGuiApplication.instance()
+        if app:
+            app.primaryScreenChanged.connect(self._on_primary_screen_changed)
+            app.screenAdded.connect(self._on_screen_added)
+            app.screenRemoved.connect(self._on_screen_removed)
         self.property_panel.shape_changed.connect(self._on_property_changed)
 
         self.project.changed.connect(self._refresh_object_list)
+        self.project.changed.connect(self._update_project_label)
+
+        # Screen combo
+        self.screen_combo.currentIndexChanged.connect(self._on_screen_selected)
+
+    def _initialize_screens(self) -> None:
+        """Initialize screen detection and workspace setup."""
+        # Store known screens for change detection
+        all_screens = QGuiApplication.screens()
+        for screen in all_screens:
+            self._known_screens.add(screen.name())
+
+        self._update_screen_combo()
+
+        # Auto-select first available projection screen
+        screens = self.workspace_manager.get_available_screens()
+        if screens:
+            idx, screen_id, screen_name, geometry = screens[0]
+            self.workspace_manager.switch_to_screen(screen_id, screen_name)
+            self.project = self.workspace_manager.get_current_workspace()
+            self._set_project(self.project)
+            self.screen_combo.setCurrentIndex(0)
+        else:
+            # No projection screens available
+            self.project = Project()
+            self.project.name = "No Screens"
+            self._set_project(self.project)
+
+    def _update_screen_combo(self) -> None:
+        """Update the screen dropdown with available screens."""
+        self.screen_combo.blockSignals(True)
+        self.screen_combo.clear()
+
+        screens = self.workspace_manager.get_available_screens()
+        for idx, screen_id, screen_name, geometry in screens:
+            item_text = f"{screen_name} ({geometry.width()}x{geometry.height()})"
+            self.screen_combo.addItem(item_text, (idx, screen_id, screen_name))
+
+        if self.screen_combo.count() == 0:
+            self.screen_combo.addItem("No screens available", None)
+
+        self.screen_combo.blockSignals(False)
+
+    def _on_screen_selected(self, index: int) -> None:
+        """Handle screen selection from dropdown."""
+        if index < 0:
+            return
+
+        data = self.screen_combo.itemData(index)
+        if not data:
+            return
+
+        idx, screen_id, screen_name = data
+        self._switch_to_screen(idx, screen_id, screen_name)
+
+    def _switch_to_screen(self, screen_index: int, screen_id: str, screen_name: str) -> None:
+        """Switch to a different screen workspace."""
+        # Check for unsaved changes
+        if self._has_unsaved_changes():
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Unsaved Changes")
+            msg.setText(f"You have unsaved changes in '{self.project.name}'. Switch screens anyway?")
+            msg.setIcon(QMessageBox.Warning)
+            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
+            msg.setDefaultButton(QMessageBox.Cancel)
+            msg.setStyleSheet("""
+                QMessageBox {
+                    background-color: #1a1a1a;
+                }
+                QMessageBox QLabel {
+                    color: #ffffff;
+                    font-size: 13px;
+                }
+                QPushButton {
+                    background-color: #2a2a2a;
+                    color: #00d4aa;
+                    border: 1px solid #3a3a3a;
+                    padding: 8px 20px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    min-width: 80px;
+                }
+                QPushButton:hover {
+                    background-color: #3a3a3a;
+                    border-color: #00d4aa;
+                }
+            """)
+            if msg.exec() == QMessageBox.Cancel:
+                # Revert combo box to current screen
+                current_id = self.workspace_manager.get_current_screen_id()
+                if current_id:
+                    for i in range(self.screen_combo.count()):
+                        data = self.screen_combo.itemData(i)
+                        if data and data[1] == current_id:
+                            self.screen_combo.blockSignals(True)
+                            self.screen_combo.setCurrentIndex(i)
+                            self.screen_combo.blockSignals(False)
+                            break
+                return
+
+        # Get the geometry from available screens
+        screens = self.workspace_manager.get_available_screens()
+        geometry = None
+        for s_idx, s_id, s_name, s_geo in screens:
+            if s_id == screen_id:
+                geometry = s_geo
+                break
+
+        # Switch workspace
+        self.project = self.workspace_manager.switch_to_screen(screen_id, screen_name)
+        self._set_project(self.project)
+
+        # Apply screen resolution
+        if geometry:
+            self.project.canvas.width = geometry.width()
+            self.project.canvas.height = geometry.height()
+            self.project.touch()
+            self.canvas.fit_to_canvas()
+
+        self.selected_screen_index = screen_index
+
+    def _has_unsaved_changes(self) -> bool:
+        """Check if current project has unsaved changes."""
+        # If project has shapes but no path, it's unsaved
+        if len(self.project.shapes) > 0 and not self.project.path:
+            return True
+        # Could add more sophisticated tracking here if needed
+        return False
+
+    def _on_workspace_changed(self, screen_id: str) -> None:
+        """Handle workspace change signal."""
+        project = self.workspace_manager.get_workspace(screen_id)
+        if project:
+            self.project = project
+            self._update_project_label()
+
+    def _rescan_screens(self) -> None:
+        """Rescan for connected screens."""
+        self._update_screen_combo()
+        self.statusBar().showMessage("Screens rescanned", 2000)
+
+    def _update_project_label(self) -> None:
+        """Update the project name label."""
+        name = self.project.name if hasattr(self.project, 'name') else "Untitled"
+        self.project_label.setText(f"PROJECT: {name}")
 
     def _on_canvas_selection(self, shape: Optional[Shape]) -> None:
         self.property_panel.set_shape(shape)
@@ -287,7 +505,16 @@ class MainWindow(QMainWindow):
             self.object_list.select_shape(selected_id)
 
     def _new_project(self) -> None:
-        self._set_project(Project())
+        """Create a new project for the current screen."""
+        screen_id = self.workspace_manager.get_current_screen_id()
+        if screen_id:
+            new_project = Project()
+            new_project.name = "Untitled"
+            self.workspace_manager._workspaces[screen_id] = new_project
+            self.project = new_project
+            self._set_project(self.project)
+        else:
+            self._set_project(Project())
 
     def _open_project(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open Project", "", "Projection Map (*.pmap.json)")
@@ -314,74 +541,58 @@ class MainWindow(QMainWindow):
     def _set_project(self, project: Project) -> None:
         try:
             self.project.changed.disconnect(self._refresh_object_list)
+            self.project.changed.disconnect(self._update_project_label)
         except Exception:
             pass
+
         self.project = project
         self.project.changed.connect(self._refresh_object_list)
+        self.project.changed.connect(self._update_project_label)
         self.canvas.project = self.project
         self.canvas.scene.project = self.project
-        self.canvas.project.changed.connect(self.canvas._sync_items)
-        self.canvas.project.changed.connect(self._refresh_object_list)
-        self.canvas._sync_items()
+        self.project.changed.connect(self.canvas._sync_items)
         self._refresh_object_list()
         self.property_panel.set_shape(None)
-        if self.projection_window:
-            self.projection_window.close()
-            self.projection_window = None
+        self._update_project_label()
+
+        # Close any open projection windows
+        for pw in list(self._projection_windows.values()):
+            pw.close()
+        self._projection_windows.clear()
+
         self.action_test_mode.setChecked(bool(self.project.ui_state.get("test_mode", False)))
 
-    def _auto_select_screen(self) -> None:
-        screens = QGuiApplication.screens()
-        primary = QGuiApplication.primaryScreen()
-        if len(screens) > 1:
-            for idx, screen in enumerate(screens):
-                if screen != primary:
-                    self.selected_screen_index = idx
-                    self._apply_screen_resolution(screen)
-                    break
-        else:
-            self.selected_screen_index = 0
-            if screens:
-                self._apply_screen_resolution(screens[0])
-        self.project.ui_state["last_projection_screen_id"] = self.selected_screen_index
-
-    def _select_projection_screen(self) -> None:
-        screens = QGuiApplication.screens()
-        items = [f"{i}: {screen.name()}" for i, screen in enumerate(screens)]
-        current = self.selected_screen_index or 0
-        value, ok = QInputDialog.getItem(self, "Projection Display", "Select display:", items, current, False)
-        if ok and value:
-            index = int(value.split(":")[0])
-            self.selected_screen_index = index
-            self.project.ui_state["last_projection_screen_id"] = index
-            if index < len(screens):
-                self._apply_screen_resolution(screens[index])
-
-    def _open_projection(self) -> None:
-        screens = QGuiApplication.screens()
-        index = self.selected_screen_index or 0
-        if index >= len(screens):
-            index = 0
-        screen = screens[index] if screens else None
-        if not self.projection_window:
-            self.projection_window = ProjectionWindow(self.project, self)
-            self.projection_window.open_on_screen(screen)
-            self.projection_window.renderer.update()
-        if screen:
-            self._apply_screen_resolution(screen)
-
-    def _apply_screen_resolution(self, screen) -> None:
-        if not screen:
+    def _toggle_projection(self) -> None:
+        """Toggle projection for the current screen."""
+        screen_id = self.workspace_manager.get_current_screen_id()
+        if not screen_id:
+            self.statusBar().showMessage("No screen selected for projection", 3000)
             return
-        geometry = screen.geometry()
-        self.project.canvas.width = geometry.width()
-        self.project.canvas.height = geometry.height()
-        self.project.touch()
-        self.canvas.fit_to_canvas()
-        if hasattr(self, "zoom_slider"):
-            self.zoom_slider.blockSignals(True)
-            self.zoom_slider.setValue(int(self.canvas.get_zoom() * 100))
-            self.zoom_slider.blockSignals(False)
+
+        # Check if projection is already open for this screen
+        if screen_id in self._projection_windows:
+            self._projection_windows[screen_id].close()
+            del self._projection_windows[screen_id]
+            return
+
+        # Find the screen
+        all_screens = QGuiApplication.screens()
+        screens = self.workspace_manager.get_available_screens()
+
+        target_screen = None
+        for idx, s_id, s_name, geometry in screens:
+            if s_id == screen_id:
+                target_screen = all_screens[idx] if idx < len(all_screens) else None
+                break
+
+        if not target_screen:
+            self.statusBar().showMessage("Screen not found", 3000)
+            return
+
+        # Create projection window
+        pw = ProjectionWindow(self.project, self)
+        pw.open_on_screen(target_screen)
+        self._projection_windows[screen_id] = pw
 
     def _on_zoom_changed(self, value: int) -> None:
         self.canvas.set_zoom(value / 100.0)
@@ -416,3 +627,112 @@ class MainWindow(QMainWindow):
         for shape_id in list(dict.fromkeys(selected_ids)):
             self.project.remove_shape(shape_id)
         self.property_panel.set_shape(None)
+
+    def _on_screen_added(self, screen) -> None:
+        """Handle new screen connected."""
+        screen_name = screen.name()
+
+        # Check if this is a new screen
+        if screen_name in self._known_screens:
+            return
+
+        self._known_screens.add(screen_name)
+
+        # Check if it's not the primary screen
+        primary = QGuiApplication.primaryScreen()
+        if screen == primary:
+            return
+
+        # Show dialog asking to switch to the new screen
+        geometry = screen.geometry()
+        msg = QMessageBox(self)
+        msg.setWindowTitle("New Screen Detected")
+        msg.setText(f"A new screen was connected:\n\n{screen_name}\n{geometry.width()}x{geometry.height()}\n\nSwitch to this screen?")
+        msg.setIcon(QMessageBox.Question)
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.Yes)
+
+        # Style the message box
+        msg.setStyleSheet("""
+            QMessageBox {
+                background-color: #1a1a1a;
+            }
+            QMessageBox QLabel {
+                color: #ffffff;
+                font-size: 13px;
+            }
+            QPushButton {
+                background-color: #2a2a2a;
+                color: #00d4aa;
+                border: 1px solid #3a3a3a;
+                padding: 8px 20px;
+                border-radius: 4px;
+                font-weight: bold;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+                border-color: #00d4aa;
+            }
+            QPushButton:pressed {
+                background-color: #1a1a1a;
+            }
+        """)
+
+        result = msg.exec()
+
+        if result == QMessageBox.Yes:
+            # Update screen combo and switch
+            self._update_screen_combo()
+
+            # Find the screen in available screens
+            screens = self.workspace_manager.get_available_screens()
+            for idx, screen_id, s_name, _ in screens:
+                if s_name == screen_name:
+                    # Find combo index for this screen
+                    for i in range(self.screen_combo.count()):
+                        data = self.screen_combo.itemData(i)
+                        if data and data[1] == screen_id:
+                            self.screen_combo.setCurrentIndex(i)
+                            break
+                    break
+        else:
+            # Just update the combo without switching
+            self._update_screen_combo()
+
+    def _on_screen_removed(self, screen) -> None:
+        """Handle screen disconnected."""
+        screen_name = screen.name()
+
+        if screen_name in self._known_screens:
+            self._known_screens.discard(screen_name)
+
+        # Close projection window for this screen if open
+        screens = self.workspace_manager.get_available_screens()
+        all_screens = QGuiApplication.screens()
+
+        # Find screen_id for the removed screen
+        for idx, screen_id, s_name, _ in screens:
+            if s_name == screen_name and screen_id in self._projection_windows:
+                self._projection_windows[screen_id].close()
+                del self._projection_windows[screen_id]
+                break
+
+        # Update screen combo
+        self._update_screen_combo()
+
+        # Show notification
+        self.statusBar().showMessage(f"Screen disconnected: {screen_name}", 5000)
+
+    def _on_primary_screen_changed(self, screen) -> None:
+        """Handle primary screen change."""
+        self._update_screen_combo()
+
+    def closeEvent(self, event) -> None:
+        """Handle app close - save all workspaces."""
+        self.workspace_manager.save_all_workspaces()
+        # Clean up projection windows
+        for pw in list(self._projection_windows.values()):
+            pw.close()
+        self._projection_windows.clear()
+        super().closeEvent(event)
