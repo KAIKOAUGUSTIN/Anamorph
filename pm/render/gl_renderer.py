@@ -162,7 +162,7 @@ class GLRenderer(QOpenGLWidget):
             self._gl_initialized = True
 
         except Exception as e:
-            logger.error("OpenGL initialization error: %s", e)
+            logger.exception("OpenGL initialization error: %s", e)
 
     def resizeGL(self, w: int, h: int) -> None:
         """Handle resize."""
@@ -194,7 +194,7 @@ class GLRenderer(QOpenGLWidget):
             self._render_strokes(canvas_w, canvas_h)
 
         except Exception as e:
-            logger.error("Render error: %s", e)
+            logger.exception("Render error: %s", e)
 
     def _render_shape(self, shape: Shape, canvas_w: float, canvas_h: float, now: float) -> None:
         """Render a single shape."""
