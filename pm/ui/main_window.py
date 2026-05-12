@@ -325,7 +325,7 @@ class MainWindow(QMainWindow):
         # Auto-select first available projection screen
         screens = self.workspace_manager.get_available_screens()
         if screens:
-            idx, screen_id, screen_name, geometry = screens[0]
+            _, screen_id, screen_name, _ = screens[0]
             self.workspace_manager.switch_to_screen(screen_id, screen_name)
             self.project = self.workspace_manager.get_current_workspace()
             self._set_project(self.project)
@@ -363,64 +363,75 @@ class MainWindow(QMainWindow):
         idx, screen_id, screen_name = data
         self._switch_to_screen(idx, screen_id, screen_name)
 
-    def _switch_to_screen(self, screen_index: int, screen_id: str, screen_name: str) -> None:
-        """Switch to a different screen workspace."""
-        # Check for unsaved changes
-        if self._has_unsaved_changes():
-            msg = QMessageBox(self)
-            msg.setWindowTitle("Unsaved Changes")
-            msg.setText(f"You have unsaved changes in '{self.project.name}'. Switch screens anyway?")
-            msg.setIcon(QMessageBox.Warning)
-            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
-            msg.setDefaultButton(QMessageBox.Cancel)
-            msg.setStyleSheet("""
-                QMessageBox {
-                    background-color: #1a1a1a;
-                }
-                QMessageBox QLabel {
-                    color: #ffffff;
-                    font-size: 13px;
-                }
-                QPushButton {
-                    background-color: #2a2a2a;
-                    color: #00d4aa;
-                    border: 1px solid #3a3a3a;
-                    padding: 8px 20px;
-                    border-radius: 4px;
-                    font-weight: bold;
-                    min-width: 80px;
-                }
-                QPushButton:hover {
-                    background-color: #3a3a3a;
-                    border-color: #00d4aa;
-                }
-            """)
-            if msg.exec() == QMessageBox.Cancel:
-                # Revert combo box to current screen
-                current_id = self.workspace_manager.get_current_screen_id()
-                if current_id:
-                    for i in range(self.screen_combo.count()):
-                        data = self.screen_combo.itemData(i)
-                        if data and data[1] == current_id:
-                            self.screen_combo.blockSignals(True)
-                            self.screen_combo.setCurrentIndex(i)
-                            self.screen_combo.blockSignals(False)
-                            break
-                return
+    _MSG_BOX_STYLE = """
+        QMessageBox {
+            background-color: #1a1a1a;
+        }
+        QMessageBox QLabel {
+            color: #ffffff;
+            font-size: 13px;
+        }
+        QPushButton {
+            background-color: #2a2a2a;
+            color: #00d4aa;
+            border: 1px solid #3a3a3a;
+            padding: 8px 20px;
+            border-radius: 4px;
+            font-weight: bold;
+            min-width: 80px;
+        }
+        QPushButton:hover {
+            background-color: #3a3a3a;
+            border-color: #00d4aa;
+        }
+        """
 
-        # Get the geometry from available screens
-        screens = self.workspace_manager.get_available_screens()
-        geometry = None
-        for s_idx, s_id, s_name, s_geo in screens:
-            if s_id == screen_id:
-                geometry = s_geo
+    def _styled_message_box(self, title: str, text: str, icon, buttons, default) -> QMessageBox:
+        msg = QMessageBox(self)
+        msg.setWindowTitle(title)
+        msg.setText(text)
+        msg.setIcon(icon)
+        msg.setStandardButtons(buttons)
+        msg.setDefaultButton(default)
+        msg.setStyleSheet(self._MSG_BOX_STYLE)
+        return msg
+
+    def _update_screen_combo_selection(self, screen_id: str) -> None:
+        for i in range(self.screen_combo.count()):
+            data = self.screen_combo.itemData(i)
+            if data and data[1] == screen_id:
+                self.screen_combo.setCurrentIndex(i)
                 break
 
-        # Switch workspace
+    def _find_screen_geometry(self, screen_id: str):
+        screens = self.workspace_manager.get_available_screens()
+        for _, s_id, _, s_geo in screens:
+            if s_id == screen_id:
+                return s_geo
+        return None
+
+    def _switch_to_screen(self, screen_index: int, screen_id: str, screen_name: str) -> None:
+        """Switch to a different screen workspace."""
+        if self._has_unsaved_changes():
+            msg = self._styled_message_box(
+                "Unsaved Changes",
+                f"You have unsaved changes in '{self.project.name}'. Switch screens anyway?",
+                QMessageBox.Warning,
+                QMessageBox.Yes | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if msg.exec() == QMessageBox.Cancel:
+                current_id = self.workspace_manager.get_current_screen_id()
+                if current_id:
+                    self.screen_combo.blockSignals(True)
+                    self._update_screen_combo_selection(current_id)
+                    self.screen_combo.blockSignals(False)
+                return
+
+        geometry = self._find_screen_geometry(screen_id)
         self.project = self.workspace_manager.switch_to_screen(screen_id, screen_name)
         self._set_project(self.project)
 
-        # Apply screen resolution
         if geometry:
             self.project.canvas.width = geometry.width()
             self.project.canvas.height = geometry.height()
@@ -556,7 +567,7 @@ class MainWindow(QMainWindow):
         self._update_project_label()
 
         # Close any open projection windows
-        for pw in list(self._projection_windows.values()):
+        for pw in self._projection_windows.values():
             pw.close()
         self._projection_windows.clear()
 
@@ -624,7 +635,7 @@ class MainWindow(QMainWindow):
                     selected_ids.append(shape_id)
         if not selected_ids:
             return
-        for shape_id in list(dict.fromkeys(selected_ids)):
+        for shape_id in dict.fromkeys(selected_ids):
             self.project.remove_shape(shape_id)
         self.property_panel.set_shape(None)
 
@@ -632,72 +643,37 @@ class MainWindow(QMainWindow):
         """Handle new screen connected."""
         screen_name = screen.name()
 
-        # Check if this is a new screen
         if screen_name in self._known_screens:
             return
 
         self._known_screens.add(screen_name)
 
-        # Check if it's not the primary screen
         primary = QGuiApplication.primaryScreen()
         if screen == primary:
             return
 
-        # Show dialog asking to switch to the new screen
         geometry = screen.geometry()
-        msg = QMessageBox(self)
-        msg.setWindowTitle("New Screen Detected")
-        msg.setText(f"A new screen was connected:\n\n{screen_name}\n{geometry.width()}x{geometry.height()}\n\nSwitch to this screen?")
-        msg.setIcon(QMessageBox.Question)
-        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-        msg.setDefaultButton(QMessageBox.Yes)
+        msg = self._styled_message_box(
+            "New Screen Detected",
+            f"A new screen was connected:
 
-        # Style the message box
-        msg.setStyleSheet("""
-            QMessageBox {
-                background-color: #1a1a1a;
-            }
-            QMessageBox QLabel {
-                color: #ffffff;
-                font-size: 13px;
-            }
-            QPushButton {
-                background-color: #2a2a2a;
-                color: #00d4aa;
-                border: 1px solid #3a3a3a;
-                padding: 8px 20px;
-                border-radius: 4px;
-                font-weight: bold;
-                min-width: 80px;
-            }
-            QPushButton:hover {
-                background-color: #3a3a3a;
-                border-color: #00d4aa;
-            }
-            QPushButton:pressed {
-                background-color: #1a1a1a;
-            }
-        """)
+{screen_name}
+{geometry.width()}x{geometry.height()}
 
-        result = msg.exec()
+Switch to this screen?",
+            QMessageBox.Question,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
 
-        if result == QMessageBox.Yes:
-            # Update screen combo and switch
+        if msg.exec() == QMessageBox.Yes:
             self._update_screen_combo()
-
-            # Find the screen in available screens
             screens = self.workspace_manager.get_available_screens()
             for idx, screen_id, s_name, _ in screens:
                 if s_name == screen_name:
-                    # Find combo index for this screen
-                    for i in range(self.screen_combo.count()):
-                        data = self.screen_combo.itemData(i)
-                        if data and data[1] == screen_id:
-                            self.screen_combo.setCurrentIndex(i)
-                            break
+                    self._update_screen_combo_selection(screen_id)
                     break
         else:
-            # Just update the combo without switching
             self._update_screen_combo()
 
     def _on_screen_removed(self, screen) -> None:
@@ -709,7 +685,6 @@ class MainWindow(QMainWindow):
 
         # Close projection window for this screen if open
         screens = self.workspace_manager.get_available_screens()
-        all_screens = QGuiApplication.screens()
 
         # Find screen_id for the removed screen
         for idx, screen_id, s_name, _ in screens:
@@ -732,7 +707,7 @@ class MainWindow(QMainWindow):
         """Handle app close - save all workspaces."""
         self.workspace_manager.save_all_workspaces()
         # Clean up projection windows
-        for pw in list(self._projection_windows.values()):
+        for pw in self._projection_windows.values():
             pw.close()
         self._projection_windows.clear()
         super().closeEvent(event)

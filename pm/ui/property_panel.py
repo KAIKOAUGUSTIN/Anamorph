@@ -45,6 +45,9 @@ class SectionHeader(QLabel):
 class PropertyPanel(QWidget):
     shape_changed = Signal()
 
+    _LABEL_DIM_STYLE = PropertyPanel._LABEL_DIM_STYLE
+    _CHECKBOX_DIM_STYLE = PropertyPanel._CHECKBOX_DIM_STYLE
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._shape: Optional[Shape] = None
@@ -77,7 +80,7 @@ class PropertyPanel(QWidget):
         fill_layout.setContentsMargins(0, 0, 0, 0)
         fill_layout.setSpacing(8)
         fill_label = QLabel("Fill")
-        fill_label.setStyleSheet("color: #808080;")
+        fill_label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
         self.fill_button = QPushButton()
         self.fill_button.setFixedHeight(28)
         self.fill_button.setObjectName("colorButton")
@@ -92,7 +95,7 @@ class PropertyPanel(QWidget):
         stroke_layout.setContentsMargins(0, 0, 0, 0)
         stroke_layout.setSpacing(8)
         stroke_label = QLabel("Stroke")
-        stroke_label.setStyleSheet("color: #808080;")
+        stroke_label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
         self.stroke_button = QPushButton()
         self.stroke_button.setFixedHeight(28)
         self.stroke_button.setObjectName("colorButton")
@@ -107,7 +110,7 @@ class PropertyPanel(QWidget):
         width_layout.setContentsMargins(0, 0, 0, 0)
         width_layout.setSpacing(8)
         width_label = QLabel("Stroke Width")
-        width_label.setStyleSheet("color: #808080;")
+        width_label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
         self.stroke_width = ArrowSpinBox()
         self.stroke_width.setRange(0.0, 50.0)
         self.stroke_width.setSingleStep(0.5)
@@ -124,7 +127,7 @@ class PropertyPanel(QWidget):
         opacity_layout.setContentsMargins(0, 0, 0, 0)
         opacity_layout.setSpacing(8)
         opacity_label = QLabel("Opacity")
-        opacity_label.setStyleSheet("color: #808080;")
+        opacity_label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
         self.opacity_slider = ArrowSlider(Qt.Horizontal)
         self.opacity_slider.setRange(0, 100)
         self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
@@ -195,7 +198,7 @@ class PropertyPanel(QWidget):
         fit_layout.setContentsMargins(0, 0, 0, 0)
         fit_layout.setSpacing(8)
         fit_label = QLabel("Fit Mode")
-        fit_label.setStyleSheet("color: #808080;")
+        fit_label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
         self.fit_mode = QComboBox()
         self.fit_mode.addItems(["stretch", "contain", "cover", "warp"])
         self.fit_mode.setFixedWidth(100)
@@ -218,7 +221,7 @@ class PropertyPanel(QWidget):
 
         # RGB Shift
         self.rgb_enable = QCheckBox("RGB Shift")
-        self.rgb_enable.setStyleSheet("QCheckBox { color: #a0a0a0; }")
+        self.rgb_enable.setStyleSheet(PropertyPanel._CHECKBOX_DIM_STYLE)
         self.rgb_enable.stateChanged.connect(self._on_effects_changed)
         effects_layout.addWidget(self.rgb_enable)
 
@@ -245,7 +248,7 @@ class PropertyPanel(QWidget):
 
         # Pulse
         self.pulse_enable = QCheckBox("Pulse")
-        self.pulse_enable.setStyleSheet("QCheckBox { color: #a0a0a0; }")
+        self.pulse_enable.setStyleSheet(PropertyPanel._CHECKBOX_DIM_STYLE)
         self.pulse_enable.stateChanged.connect(self._on_effects_changed)
         effects_layout.addWidget(self.pulse_enable)
 
@@ -272,7 +275,7 @@ class PropertyPanel(QWidget):
 
         # Strobe
         self.strobe_enable = QCheckBox("Strobe")
-        self.strobe_enable.setStyleSheet("QCheckBox { color: #a0a0a0; }")
+        self.strobe_enable.setStyleSheet(PropertyPanel._CHECKBOX_DIM_STYLE)
         self.strobe_enable.stateChanged.connect(self._on_effects_changed)
         effects_layout.addWidget(self.strobe_enable)
 
@@ -326,7 +329,7 @@ class PropertyPanel(QWidget):
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(8)
         label_widget = QLabel(label)
-        label_widget.setStyleSheet("color: #808080;")
+        label_widget.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
         row_layout.addWidget(label_widget)
         row_layout.addStretch(1)
         row_layout.addWidget(widget)
@@ -383,7 +386,7 @@ class PropertyPanel(QWidget):
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.setSpacing(8)
             label = QLabel(f"Edge {idx + 1}")
-            label.setStyleSheet("color: #808080;")
+            label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
             checkbox = QCheckBox()
             checkbox.setChecked(edge.visible)
             slider = ArrowSlider(Qt.Horizontal)
