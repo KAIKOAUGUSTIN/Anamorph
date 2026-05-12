@@ -137,6 +137,10 @@ class PolygonItem(QGraphicsPathItem):
         self.setPen(QPen(QColor(*model.stroke_color), max(model.stroke_width, 1.0)))
         self.update_path()
 
+    def set_handles_visible(self, visible: bool) -> None:
+        for handle in self.handles:
+            handle.setVisible(visible)
+
     def update_path(self) -> None:
         path = QPainterPath()
         if self.model.points:
@@ -204,6 +208,10 @@ class CircleItem(QGraphicsEllipseItem):
         self.handles: List[VertexHandle] = []
         self._drag_value = QPointF(0, 0)
         self.handle_angle = -math.pi / 2.0
+
+    def set_handles_visible(self, visible: bool) -> None:
+        for handle in self.handles:
+            handle.setVisible(visible)
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
         self.setBrush(QBrush(QColor(*model.fill_color)))
         self.setPen(QPen(QColor(*model.stroke_color), max(model.stroke_width, 1.0)))
@@ -373,7 +381,7 @@ class CanvasEditor(QGraphicsView):
             self._last_canvas = (canvas_w, canvas_h)
             self.fit_to_canvas()
         existing_ids = set(self.items_by_id.keys())
-        current_ids = set([s.id for s in self.project.shapes])
+        current_ids = {s.id for s in self.project.shapes}
 
         for shape_id in existing_ids - current_ids:
             item = self.items_by_id.pop(shape_id)
@@ -839,10 +847,8 @@ class CanvasEditor(QGraphicsView):
                 self.setDragMode(QGraphicsView.NoDrag)
                 super().mousePressEvent(event)
                 return
-            if isinstance(hit_item, VertexHandle):
-                self._set_items_movable(False)
-                self.setDragMode(QGraphicsView.NoDrag)
-            elif isinstance(hit_item, (PolygonItem, CircleItem)) or (
+            if isinstance(hit_item, VertexHandle) or \
+               isinstance(hit_item, (PolygonItem, CircleItem)) or (
                 hasattr(hit_item, "parentItem") and isinstance(hit_item.parentItem(), (PolygonItem, CircleItem))
             ):
                 self._set_items_movable(False)
@@ -963,25 +969,14 @@ class CanvasEditor(QGraphicsView):
         except RuntimeError:
             return
         for item in items:
-            if isinstance(item, PolygonItem):
-                for handle in item.handles:
-                    handle.setVisible(False)
-            if isinstance(item, CircleItem):
-                for handle in item.handles:
-                    handle.setVisible(False)
-        items = self.scene.selectedItems()
-        if items:
-            item = items[0]
-            if isinstance(item, PolygonItem):
+            if isinstance(item, (PolygonItem, CircleItem)):
+                item.set_handles_visible(False)
+        selected = self.scene.selectedItems()
+        if selected:
+            item = selected[0]
+            if isinstance(item, (PolygonItem, CircleItem)):
                 self._set_handles_for_item(item)
-                for handle in item.handles:
-                    handle.setVisible(True)
-                self.selection_changed.emit(item.model)
-                return
-            if isinstance(item, CircleItem):
-                self._set_handles_for_item(item)
-                for handle in item.handles:
-                    handle.setVisible(True)
+                item.set_handles_visible(True)
                 self.selection_changed.emit(item.model)
                 return
         self.selection_changed.emit(None)

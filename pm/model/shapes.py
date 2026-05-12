@@ -72,6 +72,31 @@ class PolygonShape:
         elif len(self.edges) > count:
             self.edges = self.edges[:count]
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PolygonShape":
+        points = [
+            (float(p.get("x", 0.0)), float(p.get("y", 0.0)))
+            for p in data.get("points", [])
+        ]
+        edges = [EdgeVisibility.from_dict(e) for e in data.get("edges", [])]
+        shape = cls(
+            id=data.get("id", new_shape_id()),
+            name=data.get("name", "Polígono"),
+            points=points,
+            edges=edges,
+            fill_color=list(data.get("fill_color", default_fill_color())),
+            stroke_color=list(data.get("stroke_color", default_stroke_color())),
+            stroke_width=float(data.get("stroke_width", 2.0)),
+            opacity=float(data.get("opacity", 1.0)),
+            blend_mode=data.get("blend_mode", "normal"),
+            media=MediaRef.from_dict(data.get("media", {})),
+            effects=Effects.from_dict(data.get("effects", {})),
+            visible=bool(data.get("visible", True)),
+            locked=bool(data.get("locked", False)),
+        )
+        shape.ensure_edges()
+        return shape
+
 
 @dataclass
 class CircleShape:
@@ -104,6 +129,54 @@ class CircleShape:
     def radius(self, value: float) -> None:
         self.radius_x = float(value)
         self.radius_y = float(value)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "CircleShape":
+        center = data.get("center", {})
+        radius_x = data.get("radius_x")
+        radius_y = data.get("radius_y")
+        if radius_x is None or radius_y is None:
+            radius_val = float(data.get("radius", 40.0))
+            radius_x = radius_x if radius_x is not None else radius_val
+            radius_y = radius_y if radius_y is not None else radius_val
+        shape = cls(
+            id=data.get("id", new_shape_id()),
+            name=data.get("name", "Círculo"),
+            center=(float(center.get("x", 0.0)), float(center.get("y", 0.0))),
+            radius_x=float(radius_x),
+            radius_y=float(radius_y),
+            control_points=int(data.get("control_points", 4)),
+            anchors=[
+                (float(p.get("x", 0.0)), float(p.get("y", 0.0)))
+                for p in data.get("anchors", [])
+            ],
+            fill_color=list(data.get("fill_color", default_fill_color())),
+            stroke_color=list(data.get("stroke_color", default_stroke_color())),
+            stroke_width=float(data.get("stroke_width", 2.0)),
+            opacity=float(data.get("opacity", 1.0)),
+            blend_mode=data.get("blend_mode", "normal"),
+            media=MediaRef.from_dict(data.get("media", {})),
+            effects=Effects.from_dict(data.get("effects", {})),
+            visible=bool(data.get("visible", True)),
+            locked=bool(data.get("locked", False)),
+        )
+        if shape.anchors:
+            xs = [p[0] for p in shape.anchors]
+            ys = [p[1] for p in shape.anchors]
+            minx, maxx = min(xs), max(xs)
+            miny, maxy = min(ys), max(ys)
+            shape.center = ((minx + maxx) / 2.0, (miny + maxy) / 2.0)
+            shape.radius_x = max((maxx - minx) / 2.0, 1.0)
+            shape.radius_y = max((maxy - miny) / 2.0, 1.0)
+        else:
+            cx, cy = shape.center
+            shape.anchors = [
+                (cx, cy - shape.radius_y),
+                (cx + shape.radius_x, cy),
+                (cx, cy + shape.radius_y),
+                (cx - shape.radius_x, cy),
+            ]
+        return shape
 
 
 Shape = Union[PolygonShape, CircleShape]
@@ -169,73 +242,9 @@ def shape_to_dict(shape: Shape) -> Dict[str, Any]:
 
 
 def shape_from_dict(data: Dict[str, Any]) -> Shape:
-    shape_type = data.get("type")
+    shape_type = data.get("type", "polygon")
     if shape_type == "polygon":
-        points = []
-        for p in data.get("points", []):
-            points.append((float(p.get("x", 0.0)), float(p.get("y", 0.0))))
-        edges = [EdgeVisibility.from_dict(e) for e in data.get("edges", [])]
-        shape = PolygonShape(
-            id=data.get("id", new_shape_id()),
-            name=data.get("name", "Polígono"),
-            points=points,
-            edges=edges,
-            fill_color=list(data.get("fill_color", default_fill_color())),
-            stroke_color=list(data.get("stroke_color", default_stroke_color())),
-            stroke_width=float(data.get("stroke_width", 2.0)),
-            opacity=float(data.get("opacity", 1.0)),
-            blend_mode=data.get("blend_mode", "normal"),
-            media=MediaRef.from_dict(data.get("media", {})),
-            effects=Effects.from_dict(data.get("effects", {})),
-            visible=bool(data.get("visible", True)),
-            locked=bool(data.get("locked", False)),
-        )
-        shape.ensure_edges()
-        return shape
-    if shape_type == "circle":
-        center = data.get("center", {})
-        radius_x = data.get("radius_x")
-        radius_y = data.get("radius_y")
-        if radius_x is None or radius_y is None:
-            radius_val = float(data.get("radius", 40.0))
-            radius_x = radius_x if radius_x is not None else radius_val
-            radius_y = radius_y if radius_y is not None else radius_val
-        shape = CircleShape(
-            id=data.get("id", new_shape_id()),
-            name=data.get("name", "Círculo"),
-            center=(float(center.get("x", 0.0)), float(center.get("y", 0.0))),
-            radius_x=float(radius_x),
-            radius_y=float(radius_y),
-            control_points=int(data.get("control_points", 4)),
-            anchors=[
-                (float(p.get("x", 0.0)), float(p.get("y", 0.0)))
-                for p in data.get("anchors", [])
-            ],
-            fill_color=list(data.get("fill_color", default_fill_color())),
-            stroke_color=list(data.get("stroke_color", default_stroke_color())),
-            stroke_width=float(data.get("stroke_width", 2.0)),
-            opacity=float(data.get("opacity", 1.0)),
-            blend_mode=data.get("blend_mode", "normal"),
-            media=MediaRef.from_dict(data.get("media", {})),
-            effects=Effects.from_dict(data.get("effects", {})),
-            visible=bool(data.get("visible", True)),
-            locked=bool(data.get("locked", False)),
-        )
-        if shape.anchors:
-            xs = [p[0] for p in shape.anchors]
-            ys = [p[1] for p in shape.anchors]
-            minx, maxx = min(xs), max(xs)
-            miny, maxy = min(ys), max(ys)
-            shape.center = ((minx + maxx) / 2.0, (miny + maxy) / 2.0)
-            shape.radius_x = max((maxx - minx) / 2.0, 1.0)
-            shape.radius_y = max((maxy - miny) / 2.0, 1.0)
-        else:
-            cx, cy = shape.center
-            shape.anchors = [
-                (cx, cy - shape.radius_y),
-                (cx + shape.radius_x, cy),
-                (cx, cy + shape.radius_y),
-                (cx - shape.radius_x, cy),
-            ]
-        return shape
-    raise ValueError(f"Tipo de shape desconhecido: {shape_type}")
+        return PolygonShape.from_dict(data)
+    elif shape_type == "circle":
+        return CircleShape.from_dict(data)
+    return PolygonShape.from_dict(data)

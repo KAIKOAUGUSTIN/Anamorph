@@ -86,28 +86,32 @@ class GLRenderer(QOpenGLWidget):
 
         if self._gl_initialized and self.context():
             self.makeCurrent()
-            # Delete textures
-            for tex_id in self._image_cache.values():
-                glDeleteTextures(1, [tex_id])
-            for tex_id in self._video_textures.values():
-                glDeleteTextures(1, [tex_id])
-            self._image_cache.clear()
+            self._cleanup_textures()
+            self._cleanup_buffers()
+            self._cleanup_programs()
 
-            # Delete buffers
-            if self._vbo:
-                glDeleteBuffers(1, [self._vbo])
-            if self._ebo:
-                glDeleteBuffers(1, [self._ebo])
-            if self._vao:
-                glDeleteVertexArrays(1, [self._vao])
+    def _cleanup_textures(self) -> None:
+        for tex_id in self._image_cache.values():
+            glDeleteTextures(1, [tex_id])
+        for tex_id in self._video_textures.values():
+            glDeleteTextures(1, [tex_id])
+        self._image_cache.clear()
 
-            # Delete programs
-            if self._program_texture:
-                glDeleteProgram(self._program_texture)
-            if self._program_solid:
-                glDeleteProgram(self._program_solid)
-            if self._program_stroke:
-                glDeleteProgram(self._program_stroke)
+    def _cleanup_buffers(self) -> None:
+        if self._vbo:
+            glDeleteBuffers(1, [self._vbo])
+        if self._ebo:
+            glDeleteBuffers(1, [self._ebo])
+        if self._vao:
+            glDeleteVertexArrays(1, [self._vao])
+
+    def _cleanup_programs(self) -> None:
+        if self._program_texture:
+            glDeleteProgram(self._program_texture)
+        if self._program_solid:
+            glDeleteProgram(self._program_solid)
+        if self._program_stroke:
+            glDeleteProgram(self._program_stroke)
 
     def initializeGL(self) -> None:
         """Initialize OpenGL resources."""
@@ -333,35 +337,41 @@ class GLRenderer(QOpenGLWidget):
             if not shape.visible:
                 continue
 
-            color = shape.stroke_color
-            alpha = (color[3] / 255.0 * shape.opacity) if len(color) > 3 else shape.opacity
-
+            alpha = self._stroke_alpha(shape)
             if isinstance(shape, PolygonShape):
-                shape.ensure_edges()
-                points = shape.points
-                for idx, edge in enumerate(shape.edges):
-                    if not edge.visible:
-                        continue
-                    p1 = points[idx]
-                    p2 = points[(idx + 1) % len(points)]
-                    if edge.percent < 1.0:
-                        dx = (p2[0] - p1[0]) * edge.percent
-                        dy = (p2[1] - p1[1]) * edge.percent
-                        p2 = (p1[0] + dx, p1[1] + dy)
-                    self._draw_line(p1, p2, color[:3], alpha, shape.stroke_width, canvas_w, canvas_h)
-
+                self._render_polygon_stroke(shape, alpha, canvas_w, canvas_h)
             elif isinstance(shape, CircleShape):
-                cx, cy = shape.center
-                rx = max(shape.radius_x, 1.0)
-                ry = max(shape.radius_y, 1.0)
-                # Draw circle as line segments
-                segments = 48
-                for i in range(segments):
-                    a1 = i * 2 * math.pi / segments
-                    a2 = (i + 1) * 2 * math.pi / segments
-                    p1 = (cx + rx * math.cos(a1), cy + ry * math.sin(a1))
-                    p2 = (cx + rx * math.cos(a2), cy + ry * math.sin(a2))
-                    self._draw_line(p1, p2, color[:3], alpha, shape.stroke_width, canvas_w, canvas_h)
+                self._render_circle_stroke(shape, alpha, canvas_w, canvas_h)
+
+    def _stroke_alpha(self, shape: Shape) -> float:
+        color = shape.stroke_color
+        return (color[3] / 255.0 * shape.opacity) if len(color) > 3 else shape.opacity
+
+    def _render_polygon_stroke(self, shape: PolygonShape, alpha: float, canvas_w: float, canvas_h: float) -> None:
+        shape.ensure_edges()
+        points = shape.points
+        for idx, edge in enumerate(shape.edges):
+            if not edge.visible:
+                continue
+            p1 = points[idx]
+            p2 = points[(idx + 1) % len(points)]
+            if edge.percent < 1.0:
+                dx = (p2[0] - p1[0]) * edge.percent
+                dy = (p2[1] - p1[1]) * edge.percent
+                p2 = (p1[0] + dx, p1[1] + dy)
+            self._draw_line(p1, p2, shape.stroke_color[:3], alpha, shape.stroke_width, canvas_w, canvas_h)
+
+    def _render_circle_stroke(self, shape: CircleShape, alpha: float, canvas_w: float, canvas_h: float) -> None:
+        cx, cy = shape.center
+        rx = max(shape.radius_x, 1.0)
+        ry = max(shape.radius_y, 1.0)
+        segments = 48
+        for i in range(segments):
+            a1 = i * 2 * math.pi / segments
+            a2 = (i + 1) * 2 * math.pi / segments
+            p1 = (cx + rx * math.cos(a1), cy + ry * math.sin(a1))
+            p2 = (cx + rx * math.cos(a2), cy + ry * math.sin(a2))
+            self._draw_line(p1, p2, shape.stroke_color[:3], alpha, shape.stroke_width, canvas_w, canvas_h)
 
     def _draw_line(
         self,
@@ -495,42 +505,44 @@ class GLRenderer(QOpenGLWidget):
             return None, (0, 0)
 
         if media.kind == "image":
-            # Check cache first
-            cached_tex = self._image_cache.get(media.path)
-            if cached_tex:
-                # Return cached texture ID
-                # Load image to get dimensions (only needed for UV calculation)
-                img = self._load_image(media.path)
-                if img:
-                    return cached_tex, (img.width(), img.height())
-                return cached_tex, (1, 1)
-
-            # Load image and create texture
-            img = self._load_image(media.path)
-            if not img:
-                return None, (0, 0)
-
-            tex_id = self._create_texture_from_qimage(img)
-            if tex_id:
-                self._image_cache[media.path] = tex_id
-                return tex_id, (img.width(), img.height())
-
+            return self._get_image_texture(media)
         elif media.kind == "video":
-            # Video textures are not cached (frames change)
-            player = self._video_players.get(media.path)
-            if not player:
-                player = VideoPlayer(media.path)
-                player.start()
-                self._video_players[media.path] = player
-
-            frame, size = player.get_frame()
-            if frame is not None:
-                qimg = QImage(frame.data, frame.shape[1], frame.shape[0], frame.strides[0], QImage.Format_RGB888).copy()
-                qimg = qimg.convertToFormat(QImage.Format_RGBA8888)
-                tex_id = self._create_texture_from_qimage(qimg)
-                return tex_id, size
+            return self._get_video_texture(media)
 
         return None, (0, 0)
+
+    def _get_image_texture(self, media: MediaRef) -> Tuple[Optional[int], Tuple[int, int]]:
+        cached_tex = self._image_cache.get(media.path)
+        if cached_tex:
+            img = self._load_image(media.path)
+            if img:
+                return cached_tex, (img.width(), img.height())
+            return cached_tex, (1, 1)
+
+        img = self._load_image(media.path)
+        if not img:
+            return None, (0, 0)
+
+        tex_id = self._create_texture_from_qimage(img)
+        if tex_id:
+            self._image_cache[media.path] = tex_id
+            return tex_id, (img.width(), img.height())
+        return None, (0, 0)
+
+    def _get_video_texture(self, media: MediaRef) -> Tuple[Optional[int], Tuple[int, int]]:
+        player = self._video_players.get(media.path)
+        if not player:
+            player = VideoPlayer(media.path)
+            player.start()
+            self._video_players[media.path] = player
+
+        frame, size = player.get_frame()
+        if frame is None:
+            return None, (0, 0)
+        qimg = QImage(frame.data, frame.shape[1], frame.shape[0], frame.strides[0], QImage.Format_RGB888).copy()
+        qimg = qimg.convertToFormat(QImage.Format_RGBA8888)
+        tex_id = self._create_texture_from_qimage(qimg)
+        return (tex_id, size) if tex_id else (None, (0, 0))
 
     def _create_texture_from_qimage(self, image: QImage) -> Optional[int]:
         """Create an OpenGL texture from a QImage."""
