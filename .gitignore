@@ -22,11 +22,7 @@ logs/
 Thumbs.db
 .idea/
 *.swp
-
-# AIOX Local (AIOX)
-.aiox-core/local/
-.claude/settings.local.json
-.aiox/install-log.txt
+.claude
 
 # Python
 __pycache__/

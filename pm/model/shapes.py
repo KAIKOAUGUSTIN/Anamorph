@@ -84,15 +84,7 @@ class PolygonShape:
             name=data.get("name", "Polígono"),
             points=points,
             edges=edges,
-            fill_color=list(data.get("fill_color", default_fill_color())),
-            stroke_color=list(data.get("stroke_color", default_stroke_color())),
-            stroke_width=float(data.get("stroke_width", 2.0)),
-            opacity=float(data.get("opacity", 1.0)),
-            blend_mode=data.get("blend_mode", "normal"),
-            media=MediaRef.from_dict(data.get("media", {})),
-            effects=Effects.from_dict(data.get("effects", {})),
-            visible=bool(data.get("visible", True)),
-            locked=bool(data.get("locked", False)),
+            **_common_shape_kwargs(data),
         )
         shape.ensure_edges()
         return shape
@@ -150,15 +142,7 @@ class CircleShape:
                 (float(p.get("x", 0.0)), float(p.get("y", 0.0)))
                 for p in data.get("anchors", [])
             ],
-            fill_color=list(data.get("fill_color", default_fill_color())),
-            stroke_color=list(data.get("stroke_color", default_stroke_color())),
-            stroke_width=float(data.get("stroke_width", 2.0)),
-            opacity=float(data.get("opacity", 1.0)),
-            blend_mode=data.get("blend_mode", "normal"),
-            media=MediaRef.from_dict(data.get("media", {})),
-            effects=Effects.from_dict(data.get("effects", {})),
-            visible=bool(data.get("visible", True)),
-            locked=bool(data.get("locked", False)),
+            **_common_shape_kwargs(data),
         )
         if shape.anchors:
             xs = [p[0] for p in shape.anchors]
@@ -180,6 +164,20 @@ class CircleShape:
 
 
 Shape = Union[PolygonShape, CircleShape]
+
+
+def _common_shape_kwargs(data: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "fill_color": list(data.get("fill_color", default_fill_color())),
+        "stroke_color": list(data.get("stroke_color", default_stroke_color())),
+        "stroke_width": float(data.get("stroke_width", 2.0)),
+        "opacity": float(data.get("opacity", 1.0)),
+        "blend_mode": data.get("blend_mode", "normal"),
+        "media": MediaRef.from_dict(data.get("media", {})),
+        "effects": Effects.from_dict(data.get("effects", {})),
+        "visible": bool(data.get("visible", True)),
+        "locked": bool(data.get("locked", False)),
+    }
 
 
 def polygon_from_points(points: List[Tuple[float, float]], name: Optional[str] = None) -> PolygonShape:

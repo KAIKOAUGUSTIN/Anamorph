@@ -1055,35 +1055,3 @@ def _distance_point_to_segment(p: QPointF, a: QPointF, b: QPointF) -> float:
     dx = px - cx
     dy = py - cy
     return (dx * dx + dy * dy) ** 0.5
-
-
-def _curve_points_from_anchors(points: List[Tuple[float, float]], samples_per_seg: int = 12) -> List[Tuple[float, float]]:
-    if len(points) < 3:
-        return list(points)
-    if samples_per_seg < 4:
-        samples_per_seg = 4
-    out: List[Tuple[float, float]] = []
-    n = len(points)
-    for i in range(n):
-        p0x, p0y = points[(i - 1) % n]
-        p1x, p1y = points[i % n]
-        p2x, p2y = points[(i + 1) % n]
-        p3x, p3y = points[(i + 2) % n]
-        for s in range(samples_per_seg):
-            t = s / samples_per_seg
-            t2 = t * t
-            t3 = t2 * t
-            x = 0.5 * (
-                (2 * p1x)
-                + (-p0x + p2x) * t
-                + (2 * p0x - 5 * p1x + 4 * p2x - p3x) * t2
-                + (-p0x + 3 * p1x - 3 * p2x + p3x) * t3
-            )
-            y = 0.5 * (
-                (2 * p1y)
-                + (-p0y + p2y) * t
-                + (2 * p0y - 5 * p1y + 4 * p2y - p3y) * t2
-                + (-p0y + 3 * p1y - 3 * p2y + p3y) * t3
-            )
-            out.append((x, y))
-    return out

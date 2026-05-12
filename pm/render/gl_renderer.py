@@ -423,6 +423,16 @@ class GLRenderer(QOpenGLWidget):
         media: MediaRef,
     ) -> List[Tuple[float, float]]:
         """Compute UV coordinates for shape vertices."""
+        return self._compute_fit_uvs(points, image.width(), image.height(), media)
+
+    def _compute_fit_uvs(
+        self,
+        points: List[Tuple[float, float]],
+        media_w: int,
+        media_h: int,
+        media: MediaRef,
+    ) -> List[Tuple[float, float]]:
+        """Core UV computation shared by _compute_uvs and _compute_uvs_from_size."""
         if not points:
             return []
 
@@ -432,11 +442,10 @@ class GLRenderer(QOpenGLWidget):
         box_w = max(maxx - minx, 1e-5)
         box_h = max(maxy - miny, 1e-5)
 
-        media_w = max(image.width(), 1)
-        media_h = max(image.height(), 1)
+        media_w = max(media_w, 1)
+        media_h = max(media_h, 1)
         mode = (media.fit_mode or "stretch").lower()
 
-        # Warp mode
         if mode == "warp":
             return self._compute_warp_uvs(points, minx, miny, box_w, box_h)
 
@@ -460,7 +469,6 @@ class GLRenderer(QOpenGLWidget):
             uvs.append((max(0.0, min(1.0, u)), max(0.0, min(1.0, v))))
 
         return uvs
-
     def _compute_warp_uvs(
         self,
         points: List[Tuple[float, float]],
@@ -566,43 +574,7 @@ class GLRenderer(QOpenGLWidget):
         media: MediaRef,
     ) -> List[Tuple[float, float]]:
         """Compute UV coordinates based on texture size."""
-        if not points:
-            return []
-
-        xs = [p[0] for p in points]
-        ys = [p[1] for p in points]
-        minx, miny, maxx, maxy = min(xs), min(ys), max(xs), max(ys)
-        box_w = max(maxx - minx, 1e-5)
-        box_h = max(maxy - miny, 1e-5)
-
-        media_w = max(tex_size[0], 1)
-        media_h = max(tex_size[1], 1)
-        mode = (media.fit_mode or "stretch").lower()
-
-        if mode == "warp":
-            return self._compute_warp_uvs(points, minx, miny, box_w, box_h)
-
-        if mode == "stretch":
-            content_w, content_h = box_w, box_h
-            offset_x, offset_y = 0.0, 0.0
-        else:
-            if mode == "contain":
-                scale = min(box_w / media_w, box_h / media_h)
-            else:  # cover
-                scale = max(box_w / media_w, box_h / media_h)
-            content_w = media_w * scale
-            content_h = media_h * scale
-            offset_x = (box_w - content_w) / 2.0
-            offset_y = (box_h - content_h) / 2.0
-
-        uvs: List[Tuple[float, float]] = []
-        for x, y in points:
-            u = (x - minx - offset_x) / content_w if content_w > 0 else 0.0
-            v = (y - miny - offset_y) / content_h if content_h > 0 else 0.0
-            uvs.append((max(0.0, min(1.0, u)), max(0.0, min(1.0, v))))
-
-        return uvs
-
+        return self._compute_fit_uvs(points, tex_size[0], tex_size[1], media)
     def _load_image(self, path: str) -> Optional[QImage]:
         """Load an image file."""
         try:
