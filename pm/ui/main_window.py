@@ -655,12 +655,7 @@ class MainWindow(QMainWindow):
         geometry = screen.geometry()
         msg = self._styled_message_box(
             "New Screen Detected",
-            f"A new screen was connected:
-
-{screen_name}
-{geometry.width()}x{geometry.height()}
-
-Switch to this screen?",
+            f"A new screen was connected:\n\n{screen_name}\n{geometry.width()}x{geometry.height()}\n\nSwitch to this screen?",
             QMessageBox.Question,
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes,
