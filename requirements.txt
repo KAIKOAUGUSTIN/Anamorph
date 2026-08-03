@@ -1,5 +1,5 @@
 PySide6>=6.11.1
-numpy>=1.26
+numpy>=2.5.1
 opencv-python>=4.9
 mapbox_earcut>=1.0
 Pillow>=12.3.0
