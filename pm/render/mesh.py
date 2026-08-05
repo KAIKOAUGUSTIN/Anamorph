@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -22,6 +22,119 @@ def triangulate_polygon(points: List[Tuple[float, float]]) -> List[int]:
         return list(map(int, indices))
     except Exception:
         return _fan_triangulation(len(points))
+
+
+# --- bezier edges -----------------------------------------------------------
+#
+# Not every surface is a straight-sided panel. Arches, vaults, curved risers
+# and anything projected onto fabric have edges that bend, and a polygon that
+# can only approximate them with more and more vertices is both fiddly to
+# place and wrong at the corners.
+#
+# Controls are stored per edge in edge-local (t, n) units - see
+# `EdgeVisibility` - so this module never has to know about the model.
+
+
+def bezier_control_points(
+    a: Tuple[float, float],
+    b: Tuple[float, float],
+    c1: Tuple[float, float],
+    c2: Tuple[float, float],
+) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    """Edge-local `(t, n)` controls -> canvas coordinates.
+
+    The perpendicular is the chord rotated a quarter turn, *not* normalised:
+    that is what makes the curve scale with the shape instead of flattening
+    out as the edge grows.
+    """
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    px, py = -dy, dx
+    return (
+        (a[0] + dx * c1[0] + px * c1[1], a[1] + dy * c1[0] + py * c1[1]),
+        (a[0] + dx * c2[0] + px * c2[1], a[1] + dy * c2[0] + py * c2[1]),
+    )
+
+
+def bezier_local_control(
+    a: Tuple[float, float],
+    b: Tuple[float, float],
+    point: Tuple[float, float],
+) -> Tuple[float, float]:
+    """The inverse: a canvas point -> edge-local `(t, n)`.
+
+    Used when a control handle is dragged; a degenerate edge has no local
+    frame, so it reports the straight control rather than dividing by zero.
+    """
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    length_sq = dx * dx + dy * dy
+    if length_sq < 1e-12:
+        return (1.0 / 3.0, 0.0)
+    ox, oy = point[0] - a[0], point[1] - a[1]
+    return ((ox * dx + oy * dy) / length_sq, (ox * -dy + oy * dx) / length_sq)
+
+
+def cubic_point(
+    a: Tuple[float, float],
+    c1: Tuple[float, float],
+    c2: Tuple[float, float],
+    b: Tuple[float, float],
+    t: float,
+) -> Tuple[float, float]:
+    u = 1.0 - t
+    w0, w1, w2, w3 = u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t
+    return (
+        a[0] * w0 + c1[0] * w1 + c2[0] * w2 + b[0] * w3,
+        a[1] * w0 + c1[1] * w1 + c2[1] * w2 + b[1] * w3,
+    )
+
+
+def edge_samples(
+    a: Tuple[float, float],
+    b: Tuple[float, float],
+    c1: Tuple[float, float],
+    c2: Tuple[float, float],
+    samples: int = 16,
+    fraction: float = 1.0,
+) -> List[Tuple[float, float]]:
+    """The edge as a point list, from `a` up to but not including `b`.
+
+    `fraction` truncates it, which is what an edge's `percent` means: on a
+    curve that has to be measured along the arc, not along the chord.
+    """
+    samples = max(1, int(samples))
+    fraction = max(0.0, min(1.0, float(fraction)))
+    p1, p2 = bezier_control_points(a, b, c1, c2)
+    return [cubic_point(a, p1, p2, b, i / samples * fraction) for i in range(samples)]
+
+
+def polygon_outline(
+    points: List[Tuple[float, float]],
+    curves: Optional[List[Tuple[Tuple[float, float], Tuple[float, float]]]] = None,
+    samples: int = 16,
+) -> List[Tuple[float, float]]:
+    """The closed boundary of a polygon, with any curved edge sampled.
+
+    `curves` is one `(c1, c2)` pair per edge, or None for an all-straight
+    polygon. Straight edges contribute their start vertex alone, so a plain
+    polygon comes back exactly as it went in - the triangulator, the stroke
+    and the hit test all keep working on the cheap path.
+    """
+    if len(points) < 3:
+        return list(points)
+    if not curves:
+        return list(points)
+
+    outline: List[Tuple[float, float]] = []
+    count = len(points)
+    for idx in range(count):
+        a = points[idx]
+        b = points[(idx + 1) % count]
+        pair = curves[idx] if idx < len(curves) else None
+        if pair is None:
+            outline.append(a)
+            continue
+        outline.extend(edge_samples(a, b, pair[0], pair[1], samples))
+    return outline
 
 
 def curve_from_anchors(points: List[Tuple[float, float]], samples_per_seg: int = 12) -> List[Tuple[float, float]]:

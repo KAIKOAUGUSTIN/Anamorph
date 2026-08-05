@@ -45,7 +45,15 @@ from pm.model.shapes import CircleShape, MeshShape, PolygonShape, Shape
 from pm.model.output import Output
 from pm.render.fit import content_rect, leaves_unit_square
 from pm.render.homography import canvas_to_uv_matrix, corner_uv_assignment
-from pm.render.mesh import mesh_outline, tessellate_mesh, triangulate_circle, triangulate_polygon
+from pm.render.mesh import (
+    bezier_control_points,
+    cubic_point,
+    edge_samples,
+    mesh_outline,
+    tessellate_mesh,
+    triangulate_circle,
+    triangulate_polygon,
+)
 from pm.render.test_pattern import GRID, render_test_pattern
 from pm.render.shaders import (
     FRAGMENT_SHADER_OUTPUT, FRAGMENT_SHADER_SOLID, FRAGMENT_SHADER_STROKE,
@@ -373,7 +381,7 @@ class GLRenderer(QOpenGLWidget):
                 uvs = self._mesh_uvs(shape)
             else:
                 uvs = self._compute_uvs_from_size(points, fit_size, shape.media)
-            uv_matrix = self._warp_matrix(shape, points)
+            uv_matrix = self._warp_matrix(shape)
             self._draw_textured_shape(
                 points, uvs, indices, tex_id, opacity, shape, now,
                 canvas_w, canvas_h, uv_matrix, fit_size,
@@ -443,13 +451,19 @@ class GLRenderer(QOpenGLWidget):
         glBindVertexArray(self._vao)
         glDrawElements(GL_TRIANGLES, len(indices), GL_UNSIGNED_INT, None)
 
-    def _warp_matrix(self, shape: Shape, points: List[Tuple[float, float]]) -> Optional[np.ndarray]:
-        """Homography for a corner-pinned surface, or None for every other case."""
+    def _warp_matrix(self, shape: Shape) -> Optional[np.ndarray]:
+        """Homography for a corner-pinned surface, or None for every other case.
+
+        Built from the shape's four *anchors*, never from the drawn outline: a
+        curved edge samples into a long point list, and a corner pin is still
+        pinned to the corners. A bulge past a corner reads outside the media
+        and is clipped, which is what "pinned to those four points" means.
+        """
         if (shape.media.fit_mode or "").lower() != "warp":
             return None
-        if not isinstance(shape, PolygonShape) or len(points) != 4:
+        if not isinstance(shape, PolygonShape) or len(shape.points) != 4:
             return None
-        return canvas_to_uv_matrix(points)
+        return canvas_to_uv_matrix(shape.points)
 
     def _draw_textured_shape(
         self,
@@ -527,7 +541,11 @@ class GLRenderer(QOpenGLWidget):
         # Clip whenever the UVs can leave the media: the bars of a `contain`
         # fit, or the gap a pan opens up.
         panned = transform.offset_x != 0.0 or transform.offset_y != 0.0
-        clip = leaves_unit_square(shape.media.fit_mode) or panned or transform.rotation != 0.0
+        # A curved edge that bulges past its corners leaves the pinned quad
+        # too, and without the clip it would drag the media's edge texel out
+        # with it.
+        curved = isinstance(shape, PolygonShape) and shape.has_curves
+        clip = leaves_unit_square(shape.media.fit_mode) or panned or curved or transform.rotation != 0.0
         glUniform1i(glGetUniformLocation(self._program_texture, "u_uv_clip"), 1 if clip else 0)
 
         region = shape.media.source_rect.normalised()
@@ -621,6 +639,15 @@ class GLRenderer(QOpenGLWidget):
                 continue
             p1 = points[idx]
             p2 = points[(idx + 1) % len(points)]
+            if edge.curved:
+                # `percent` on a curve is measured along the arc, so the
+                # sampler truncates it rather than the chord.
+                walk = edge_samples(p1, p2, edge.curve1, edge.curve2, 16, edge.percent)
+                walk.append(cubic_point(
+                    p1, *bezier_control_points(p1, p2, edge.curve1, edge.curve2), p2, edge.percent
+                ))
+                segments.extend((walk[i], walk[i + 1]) for i in range(len(walk) - 1))
+                continue
             if edge.percent < 1.0:
                 dx = (p2[0] - p1[0]) * edge.percent
                 dy = (p2[1] - p1[1]) * edge.percent
@@ -724,7 +751,9 @@ class GLRenderer(QOpenGLWidget):
             positions, _uvs, indices = tessellate_mesh(shape.points, shape.rows, shape.cols)
             return positions, indices
         if isinstance(shape, PolygonShape):
-            points = list(shape.points)
+            # The curved boundary, when there is one: the fill has to follow
+            # the same edge the stroke draws, or the media spills past it.
+            points = shape.outline()
             indices = triangulate_polygon(points)
             return points, indices
         if isinstance(shape, CircleShape):

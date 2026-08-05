@@ -20,16 +20,68 @@ def default_stroke_color() -> List[int]:
     return [220, 220, 220, 255]
 
 
+# A cubic Bezier whose controls sit exactly one and two thirds of the way
+# along the chord, with no perpendicular offset, *is* the straight segment.
+# That makes "straight" the default value rather than a special case, so an
+# edge can be curved and straightened again with nothing else to reset.
+STRAIGHT_C1 = (1.0 / 3.0, 0.0)
+STRAIGHT_C2 = (2.0 / 3.0, 0.0)
+
+
+def _default_c1() -> Tuple[float, float]:
+    return STRAIGHT_C1
+
+
+def _default_c2() -> Tuple[float, float]:
+    return STRAIGHT_C2
+
+
 @dataclass
 class EdgeVisibility:
+    """One edge of a polygon: whether it is stroked, how far, and how it bends.
+
+    `curve1` and `curve2` are the cubic's control points in **edge-local**
+    coordinates: `(t, n)`, where `t` runs along the chord from this vertex to
+    the next and `n` is perpendicular, both in units of the chord's length.
+    Storing them that way means moving, rotating or scaling the shape carries
+    the curvature along for free - an absolute control point would have to be
+    transformed at every one of those places, and would be forgotten at one.
+    """
+
     visible: bool = True
     percent: float = 1.0
+    curve1: Tuple[float, float] = field(default_factory=_default_c1)
+    curve2: Tuple[float, float] = field(default_factory=_default_c2)
+
+    @property
+    def curved(self) -> bool:
+        return (
+            abs(self.curve1[1]) > 1e-9
+            or abs(self.curve2[1]) > 1e-9
+            or abs(self.curve1[0] - STRAIGHT_C1[0]) > 1e-9
+            or abs(self.curve2[0] - STRAIGHT_C2[0]) > 1e-9
+        )
+
+    def straighten(self) -> None:
+        self.curve1 = STRAIGHT_C1
+        self.curve2 = STRAIGHT_C2
+
+    def bow(self, amount: float = 0.25) -> None:
+        """Give the edge a symmetric bulge, for the first click that curves it."""
+        self.curve1 = (STRAIGHT_C1[0], amount)
+        self.curve2 = (STRAIGHT_C2[0], amount)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data: Dict[str, Any] = {
             "visible": self.visible,
             "percent": float(self.percent),
         }
+        # Only written when it says something: a straight edge stays as small
+        # on disk as it was before curves existed.
+        if self.curved:
+            data["curve1"] = [float(self.curve1[0]), float(self.curve1[1])]
+            data["curve2"] = [float(self.curve2[0]), float(self.curve2[1])]
+        return data
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "EdgeVisibility":
@@ -38,7 +90,17 @@ class EdgeVisibility:
         return EdgeVisibility(
             visible=bool(data.get("visible", True)),
             percent=float(data.get("percent", 1.0)),
+            curve1=_read_control(data.get("curve1"), STRAIGHT_C1),
+            curve2=_read_control(data.get("curve2"), STRAIGHT_C2),
         )
+
+
+def _read_control(value: Any, fallback: Tuple[float, float]) -> Tuple[float, float]:
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return (float(value[0]), float(value[1]))
+    if isinstance(value, dict) and "t" in value:
+        return (float(value.get("t", fallback[0])), float(value.get("n", fallback[1])))
+    return fallback
 
 
 @dataclass
@@ -60,6 +122,54 @@ class PolygonShape:
     @property
     def type(self) -> str:
         return "polygon"
+
+    @property
+    def has_curves(self) -> bool:
+        return any(edge.curved for edge in self.edges)
+
+    def signed_area(self) -> float:
+        """Twice the signed area; its sign is the winding direction."""
+        total = 0.0
+        count = len(self.points)
+        for idx in range(count):
+            x0, y0 = self.points[idx]
+            x1, y1 = self.points[(idx + 1) % count]
+            total += x0 * y1 - x1 * y0
+        return total / 2.0
+
+    def bow_edge(self, index: int, amount: float = 0.25) -> None:
+        """Curve an edge *outward*, whichever way the polygon is wound.
+
+        The edge frame's normal is the chord turned a quarter, which points
+        into the shape for one winding and out of it for the other. Picking
+        the sign from the winding is what makes the first click on "Curve"
+        always produce an arch rather than a dent.
+        """
+        self.ensure_edges()
+        if index < 0 or index >= len(self.edges):
+            return
+        outward = -1.0 if self.signed_area() > 0 else 1.0
+        self.edges[index].bow(outward * abs(amount))
+
+    def curve_pairs(self) -> Optional[List[Optional[Tuple[Tuple[float, float], Tuple[float, float]]]]]:
+        """Per-edge controls for `polygon_outline`, or None if all straight.
+
+        None is the point: an all-straight polygon must keep taking the cheap
+        path through triangulation, stroking and hit testing.
+        """
+        if not self.has_curves:
+            return None
+        self.ensure_edges()
+        return [
+            (edge.curve1, edge.curve2) if edge.curved else None
+            for edge in self.edges
+        ]
+
+    def outline(self, samples: int = 16) -> List[Tuple[float, float]]:
+        """The boundary as drawn: vertices for straight edges, samples for curves."""
+        from pm.render.mesh import polygon_outline
+
+        return polygon_outline(self.points, self.curve_pairs(), samples)
 
     def ensure_edges(self) -> None:
         count = len(self.points)

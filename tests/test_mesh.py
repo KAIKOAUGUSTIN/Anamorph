@@ -342,19 +342,20 @@ def test_the_density_control_appears_only_for_meshes(panel):
 
 
 def test_typing_a_density_reshapes_the_grid(panel):
-    widget, _project, _stack, mesh = panel
+    widget, project, _stack, _mesh = panel
 
     widget.mesh_cols.setValue(4)
 
+    mesh = project.shapes[0]
     assert (mesh.rows, mesh.cols) == (2, 4)
     assert len(mesh.points) == 15
 
 
 def test_changing_the_density_is_undoable(panel):
-    widget, project, stack, mesh = panel
+    widget, project, stack, _mesh = panel
 
     widget.mesh_rows.setValue(3)
-    assert mesh.rows == 3
+    assert project.shapes[0].rows == 3
 
     stack.undo()
     assert project.shapes[0].rows == 2

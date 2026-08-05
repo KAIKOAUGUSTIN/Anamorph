@@ -504,6 +504,13 @@ class PropertyPanel(QWidget):
         """
         if self._session is not None and self._project is not None:
             self._session.commit(self._project, text)
+            # The command restores the shape from a snapshot, which puts a
+            # *new* object in the project. Re-point at it before re-arming, or
+            # every edit after the first one writes to an orphan.
+            if self._shape is not None:
+                current = self._project.get_shape(self._shape.id)
+                if current is not None:
+                    self._shape = current
             self._session.begin(self._shape)
         self.shape_changed.emit()
 
@@ -532,13 +539,20 @@ class PropertyPanel(QWidget):
             slider = ArrowSlider(Qt.Horizontal)
             slider.setRange(0, 100)
             slider.setValue(int(edge.percent * 100))
+            # The discoverable way in to a curved edge; the fast way is
+            # Alt+double-click on the edge itself.
+            curve = QCheckBox("Curve")
+            curve.setChecked(edge.curved)
+            curve.setToolTip("Bend this edge; drag the amber controls on the canvas")
             checkbox.stateChanged.connect(lambda state, i=idx: self._on_edge_visible(i, state))
             slider.valueChanged.connect(lambda value, i=idx: self._on_edge_percent(i, value))
+            curve.stateChanged.connect(lambda state, i=idx: self._on_edge_curved(i, state))
             row_layout.addWidget(checkbox)
             row_layout.addWidget(label)
             row_layout.addWidget(slider, 1)
+            row_layout.addWidget(curve)
             self.edges_layout.addWidget(row)
-            self._edge_rows.append((checkbox, slider))
+            self._edge_rows.append((checkbox, slider, curve))
         self.updateGeometry()
 
     def _clear_coord_rows(self) -> None:
@@ -626,6 +640,15 @@ class PropertyPanel(QWidget):
         shape = self._shape
         if shape is None:
             return
+
+        # Undo restores a shape from a snapshot rather than mutating it, so
+        # the object this panel is holding can be an orphan by now. Editing
+        # an orphan writes to nothing the project will ever read.
+        if self._project is not None:
+            current = self._project.get_shape(shape.id)
+            if current is not None and current is not shape:
+                self.set_shape(current)
+                return
 
         if isinstance(shape, MeshShape):
             return
@@ -840,6 +863,20 @@ class PropertyPanel(QWidget):
         self._shape.ensure_edges()
         self._shape.edges[idx].percent = float(value) / 100.0
         self._commit("Edge Length")
+
+    def _on_edge_curved(self, idx: int, state: int) -> None:
+        if self._updating or not isinstance(self._shape, PolygonShape):
+            return
+        self._shape.ensure_edges()
+        edge = self._shape.edges[idx]
+        checked = state == Qt.Checked.value
+        if checked == edge.curved:
+            return
+        if checked:
+            self._shape.bow_edge(idx)
+        else:
+            edge.straighten()
+        self._commit("Curve Edge" if checked else "Straighten Edge")
 
     def _on_add_vertex(self) -> None:
         if self._updating or not isinstance(self._shape, PolygonShape):
