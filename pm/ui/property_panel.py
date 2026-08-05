@@ -45,8 +45,16 @@ class SectionHeader(QLabel):
 class PropertyPanel(QWidget):
     shape_changed = Signal()
 
-    _LABEL_DIM_STYLE = PropertyPanel._LABEL_DIM_STYLE
-    _CHECKBOX_DIM_STYLE = PropertyPanel._CHECKBOX_DIM_STYLE
+    _LABEL_DIM_STYLE = "color: #808080;"
+    _CHECKBOX_DIM_STYLE = "QCheckBox { color: #a0a0a0; }"
+
+    # (display label, serialised value)
+    FIT_MODES = (
+        ("Stretch", "stretch"),
+        ("Contain", "contain"),
+        ("Cover", "cover"),
+        ("Corner pin", "warp"),
+    )
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -200,13 +208,24 @@ class PropertyPanel(QWidget):
         fit_label = QLabel("Fit Mode")
         fit_label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
         self.fit_mode = QComboBox()
-        self.fit_mode.addItems(["stretch", "contain", "cover", "warp"])
-        self.fit_mode.setFixedWidth(100)
-        self.fit_mode.currentTextChanged.connect(self._on_fit_mode_changed)
+        # Labels are for humans, userData is what gets serialised - renaming
+        # the display text must not invalidate existing .pmap.json files.
+        for label, value in self.FIT_MODES:
+            self.fit_mode.addItem(label, value)
+        self.fit_mode.setFixedWidth(110)
+        self.fit_mode.currentIndexChanged.connect(self._on_fit_mode_changed)
         fit_layout.addWidget(fit_label)
         fit_layout.addStretch(1)
         fit_layout.addWidget(self.fit_mode)
         media_layout.addWidget(fit_row)
+
+        self.reset_corners_btn = QPushButton("Reset Corners")
+        self.reset_corners_btn.setToolTip(
+            "Snap the four corners back to an upright rectangle.\n"
+            "Use this when a quad has been dragged over itself."
+        )
+        self.reset_corners_btn.clicked.connect(self._on_reset_corners)
+        media_layout.addWidget(self.reset_corners_btn)
 
         media_layout.addWidget(self._create_transform_section())
         layout.addWidget(self.media_group)
@@ -354,7 +373,8 @@ class PropertyPanel(QWidget):
         self._populate_edges(shape)
         self._update_point_controls(shape)
         self._update_media(shape.media)
-        self.fit_mode.setCurrentText(shape.media.fit_mode if shape.media else "stretch")
+        self._select_fit_mode(shape.media.fit_mode if shape.media else "stretch")
+        self._update_corner_pin_controls()
         if shape.media:
             self.offset_x.setValue(shape.media.transform.offset_x)
             self.offset_y.setValue(shape.media.transform.offset_y)
@@ -517,6 +537,7 @@ class PropertyPanel(QWidget):
         edges.insert(insert_idx + 1, EdgeVisibility())
         self._shape.edges = edges[: len(points)]
         self._populate_edges(self._shape)
+        self._update_corner_pin_controls()
         self.shape_changed.emit()
 
     def _on_remove_vertex(self) -> None:
@@ -531,6 +552,7 @@ class PropertyPanel(QWidget):
         if len(self._shape.edges) > len(points):
             self._shape.edges = self._shape.edges[:len(points)]
         self._populate_edges(self._shape)
+        self._update_corner_pin_controls()
         self.shape_changed.emit()
 
     def _pick_media(self, kind: str) -> None:
@@ -542,11 +564,23 @@ class PropertyPanel(QWidget):
             path, _ = QFileDialog.getOpenFileName(self, "Select Video", "", "Videos (*.mp4 *.mov *.avi *.mkv)")
         if not path:
             return
+        had_media = bool(self._shape.media and self._shape.media.path)
         if not self._shape.media:
             self._shape.media = MediaRef()
         self._shape.media.kind = kind
         self._shape.media.path = path
+
+        # Dropping media on a quad almost always means mapping it to a
+        # surface, so start in corner pin. Only on the first assignment - a
+        # deliberate fit mode chosen earlier is not overridden.
+        if not had_media and self._is_corner_pinnable():
+            self._shape.media.fit_mode = "warp"
+            self._updating = True
+            self._select_fit_mode("warp")
+            self._updating = False
+
         self._update_media(self._shape.media)
+        self._update_corner_pin_controls()
         self.shape_changed.emit()
 
     def _clear_media(self) -> None:
@@ -554,6 +588,10 @@ class PropertyPanel(QWidget):
             return
         self._shape.media = MediaRef()
         self._update_media(self._shape.media)
+        self._updating = True
+        self._select_fit_mode(self._shape.media.fit_mode)
+        self._updating = False
+        self._update_corner_pin_controls()
         self.shape_changed.emit()
 
     def _update_media(self, media: MediaRef) -> None:
@@ -564,12 +602,44 @@ class PropertyPanel(QWidget):
             self.media_label.setText("No media assigned")
             self.media_label.setStyleSheet("color: #606060; font-style: italic;")
 
-    def _on_fit_mode_changed(self, mode: str) -> None:
+    def _on_fit_mode_changed(self, _index: int) -> None:
         if self._updating or not self._shape:
             return
         if not self._shape.media:
             self._shape.media = MediaRef()
-        self._shape.media.fit_mode = mode
+        self._shape.media.fit_mode = self.fit_mode.currentData() or "stretch"
+        self._update_corner_pin_controls()
+        self.shape_changed.emit()
+
+    def _select_fit_mode(self, value: str) -> None:
+        index = self.fit_mode.findData(value)
+        self.fit_mode.setCurrentIndex(index if index >= 0 else 0)
+
+    def _is_corner_pinnable(self) -> bool:
+        """Corner pin needs exactly four corners to pin."""
+        return isinstance(self._shape, PolygonShape) and len(self._shape.points) == 4
+
+    def _update_corner_pin_controls(self) -> None:
+        pinnable = self._is_corner_pinnable()
+        index = self.fit_mode.findData("warp")
+        if index >= 0:
+            # Leave the entry visible but inert on non-quads, so it is clear
+            # the mode exists and why it does not apply here.
+            item = self.fit_mode.model().item(index)
+            if item is not None:
+                item.setEnabled(pinnable)
+        active = pinnable and (self.fit_mode.currentData() == "warp")
+        self.reset_corners_btn.setVisible(active)
+
+    def _on_reset_corners(self) -> None:
+        if not self._is_corner_pinnable():
+            return
+        xs = [p[0] for p in self._shape.points]
+        ys = [p[1] for p in self._shape.points]
+        minx, maxx = min(xs), max(xs)
+        miny, maxy = min(ys), max(ys)
+        self._shape.points = [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]
+        self._shape.ensure_edges()
         self.shape_changed.emit()
 
     def _on_transform_changed(self) -> None:
