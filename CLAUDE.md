@@ -30,7 +30,7 @@ python projection_gui.py
 
 - `pm/model/` - Data models (dataclasses, no Qt dependency)
   - `project.py` - Project root with CanvasSettings, shape list, media library; emits `changed` signal via QObject inheritance
-  - `shapes.py` - PolygonShape (with per-edge visibility and bezier controls), CircleShape and MeshShape dataclasses, serialized via `shape_to_dict`/`shape_from_dict`
+  - `shapes.py` - PolygonShape (per-edge visibility and bezier controls), CircleShape and MeshShape dataclasses, plus `Mask`; serialized via `shape_to_dict`/`shape_from_dict`
   - `media.py` - MediaRef (image/video) with fit modes, UV transform, and `SourceRect` (which region of the media feeds the surface)
   - `effects.py` - Effects (pulse, strobe, RGB shift) with parameters
   - `commands.py` - Undoable edits as `QUndoCommand`s, plus `EditSession` for turning a drag into one step
@@ -55,7 +55,7 @@ python projection_gui.py
   - `homography.py` - Corner-pin math (numpy only, no Qt/GL), shared by the renderer and the editor preview
   - `fit.py` - `content_rect`: where media sits inside a surface's box. The single source of truth for stretch/contain/cover
   - `test_pattern.py` - Calibration images (grid / checkerboard / borders) drawn with QPainter
-  - `mesh.py` - Triangulation using mapbox_earcut, the Catmull-Rom patch behind `MeshShape` (`tessellate_mesh`/`mesh_outline`), and the cubic-edge sampling behind curved polygons (`bezier_control_points`/`polygon_outline`)
+  - `mesh.py` - All the CPU-side geometry: earcut triangulation with holes (`triangulate_with_holes`), the Catmull-Rom patch behind `MeshShape` (`tessellate_mesh`/`mesh_outline`), and the cubic-edge sampling behind curved polygons (`bezier_control_points`/`polygon_outline`)
 
 - `pm/media/` - Media handling
   - `video_player.py` - OpenCV-based video playback with threading, looping, and RGB conversion
@@ -123,9 +123,17 @@ python projection_gui.py
 
    Edges are curved with Alt+double-click on the canvas or the per-edge Curve box in the panel; the amber `CurveHandle`s appear only for edges that are curved, and deliberately do not snap.
 
-8. **Snapping**: `find_snap` (`pm/model/snapping.py`) prefers a vertex, then an edge, then the grid. The dragged shape is excluded from its own candidates - its adjacent edges are zero pixels away and would pin the vertex in place. The threshold is in screen pixels, divided by the zoom before use, so the magnet feels constant to the hand.
+8. **Masks**: `shape.masks` is a list of `Mask` rings - the regions a surface must *not* project into. A wall has windows; a stage has a pillar in front of it. Turning the stroke off does not help, because the fill is what lands on the glass, so a mask removes the region from the geometry instead.
 
-9. **Input space**: `MediaRef.source_rect` (a `SourceRect`) says *which part* of the media feeds a surface, independent of where that surface sits. One clip can drive six surfaces, each taking a different region. It is applied last in the UV chain - after fit, corner pin and `MediaTransform` - in `FRAGMENT_SHADER_TEXTURE`, and mirrored in `canvas_editor._paint_media`. Aspect ratio and pixel offsets are measured against the *region*, not the whole file.
+   Points are in canvas coordinates like the surface's own, so the body gestures carry them (`_apply_to_masks` runs the same point transform the gesture applies to the outline) and `duplicate_shape` nudges them. Parenting them to the shape would have been the other option; it would need a local frame that a corner-pinned quad does not have.
+
+   The renderer cuts them with `triangulate_with_holes` - earcut takes ring end-indices, and the holes' corners become real vertices of the result, so the caller uses the combined point list the indices refer to. A circle with masks goes through `circle_ring` rather than the centre fan: a hole has to be cut out of a *simple* boundary. The editor gets the same result for free by adding each ring as a closed subpath under `Qt.OddEvenFill`, which serves as the fill and as the media's clip at once.
+
+   `MeshShape` has no `masks` field at all, deliberately: a mesh's UVs come from its grid position, and re-triangulating the boundary to cut a hole throws that parametrisation away - the one thing a mesh exists for. Masking a bent surface needs its own answer.
+
+9. **Snapping**: `find_snap` (`pm/model/snapping.py`) prefers a vertex, then an edge, then the grid. The dragged shape is excluded from its own candidates - its adjacent edges are zero pixels away and would pin the vertex in place. The threshold is in screen pixels, divided by the zoom before use, so the magnet feels constant to the hand.
+
+10. **Input space**: `MediaRef.source_rect` (a `SourceRect`) says *which part* of the media feeds a surface, independent of where that surface sits. One clip can drive six surfaces, each taking a different region. It is applied last in the UV chain - after fit, corner pin and `MediaTransform` - in `FRAGMENT_SHADER_TEXTURE`, and mirrored in `canvas_editor._paint_media`. Aspect ratio and pixel offsets are measured against the *region*, not the whole file.
 
    Axis-aligned on purpose: a free quad here would be a second homography stacked on the corner pin, and the real need ("this wall shows the left third") is a rectangle.
 
@@ -133,7 +141,7 @@ python projection_gui.py
 
 Projects saved as JSON with `.pmap.json` extension containing:
 - Canvas dimensions and background color
-- Shapes array with full state (points, colors, media, effects); a mesh also stores `rows`/`cols`, and a curved edge stores `curve1`/`curve2`
+- Shapes array with full state (points, colors, media, effects); a mesh also stores `rows`/`cols`, a curved edge stores `curve1`/`curve2`, and a masked surface stores `masks`
 - Media library paths
 - `outputs`: one entry per projector (region, keystone corners, blend, colour)
 - UI state (`last_projection_screen_id`, `test_mode`, `test_pattern`)
@@ -160,6 +168,7 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 ### Toolbar Actions
 - **Polygon/Circle/Mesh** - Add new shapes. Mesh is the bendable one: a control grid for columns, cylinders and domes
 - **Duplicate** - Copy the selected surface with an offset (`Ctrl+D`)
+- **Mask** - Cut a hole in the selected surface for a window, doorway or pillar (`Ctrl+M`)
 - **Snap** - Magnetic snapping of dragged vertices to other surfaces
 - **Project** - Toggle fullscreen projection to selected screen
 - **Test Mode** + pattern dropdown - Replace the output with a calibration pattern
@@ -172,6 +181,7 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 - `Alt` / `Ctrl` + drag - Rotate / scale the shape (see Gestures above)
 - `Alt` while dragging a vertex - Bypass snapping for that drag
 - `Ctrl+D` - Duplicate the selected shape
+- `Ctrl+M` - Cut a mask (a hole) in the selected surface
 - Double-click an edge - Insert a vertex there
 - `Alt` + double-click an edge - Curve it, or straighten it again
 - `Delete` / `Backspace` - Remove selected shape
@@ -205,6 +215,7 @@ pytest
 - `tests/test_output_ui.py` - the outputs dialog and one projection window per enabled output
 - `tests/test_mesh.py` - patch interpolation, UVs following the bend, density resampling, mesh handles and gestures
 - `tests/test_bezier_edges.py` - edge-local controls, the straight-by-default invariant, outward bowing, curve handles and hit testing
+- `tests/test_masks.py` - holes cut from the triangulated area, the odd-even preview, masks following the shape, persistence
 
 Rendering itself is not covered by the suite: `QOpenGLWidget` refuses to create a
 context on the `offscreen` platform. To check the actual output, run under a real

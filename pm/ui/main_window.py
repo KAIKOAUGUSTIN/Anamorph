@@ -170,6 +170,16 @@ class MainWindow(QMainWindow):
         self.addAction(self.action_duplicate)
         toolbar.addAction(self.action_duplicate)
 
+        self.action_mask = QAction("Mask", self)
+        self.action_mask.setShortcut(QKeySequence("Ctrl+M"))
+        self.action_mask.setShortcutContext(Qt.ApplicationShortcut)
+        self.action_mask.setToolTip(
+            "Cut a hole in the selected surface - a window, a doorway, a pillar\n"
+            "in front of the wall. Drag the red corners to shape it (Ctrl+M)"
+        )
+        self.addAction(self.action_mask)
+        toolbar.addAction(self.action_mask)
+
         toolbar.addSeparator()
 
         self.action_snap = QAction("Snap", self)
@@ -318,6 +328,7 @@ class MainWindow(QMainWindow):
         self.action_save_as.triggered.connect(lambda _checked=False: self._save_project(save_as=True))
 
         self.action_duplicate.triggered.connect(lambda _checked=False: self._duplicate_selected())
+        self.action_mask.triggered.connect(lambda _checked=False: self._mask_selected())
 
         self.canvas.selection_changed.connect(self._on_canvas_selection)
         self.canvas.zoom_changed.connect(self._on_canvas_zoom_changed)
@@ -472,6 +483,16 @@ class MainWindow(QMainWindow):
         self.undo_stack.push(AddShapeCommand(self.project, copy, "Duplicate Shape"))
         self.canvas.select_shape(copy.id)
         self.property_panel.set_shape(copy)
+
+    def _mask_selected(self) -> None:
+        item = self.canvas._current_selected_item()
+        if item is None:
+            self.statusBar().showMessage("Select a surface to mask", 3000)
+            return
+        if not self.canvas.add_mask(item):
+            self.statusBar().showMessage("This surface cannot be masked", 3000)
+            return
+        self.property_panel.set_shape(self.project.get_shape(item.model.id))
 
     def _on_list_selection(self, shape_id: str) -> None:
         self.canvas.select_shape(shape_id)

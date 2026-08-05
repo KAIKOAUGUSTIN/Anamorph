@@ -111,6 +111,10 @@ def duplicate_shape(shape: Shape, offset: float = 20.0) -> Shape:
         state["center"] = {"x": state["center"]["x"] + offset, "y": state["center"]["y"] + offset}
     if state.get("anchors"):
         state["anchors"] = [{"x": p["x"] + offset, "y": p["y"] + offset} for p in state["anchors"]]
+    # Masks are in canvas coordinates like everything else, so they have to be
+    # nudged too - a copied window whose hole stayed behind is not a copy.
+    for mask in state.get("masks", []):
+        mask["points"] = [{"x": p["x"] + offset, "y": p["y"] + offset} for p in mask["points"]]
 
     return shape_from_dict(state)
 

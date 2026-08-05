@@ -137,6 +137,48 @@ def polygon_outline(
     return outline
 
 
+def triangulate_with_holes(
+    outer: List[Tuple[float, float]],
+    holes: Optional[List[List[Tuple[float, float]]]] = None,
+) -> Tuple[List[Tuple[float, float]], List[int]]:
+    """Triangulate a ring with holes punched out of it.
+
+    Returns the combined vertex list - outer ring first, then each hole - and
+    indices into it, because the holes' points are real vertices of the result
+    and the caller needs the same array the indices refer to.
+
+    Falling back to the plain outline when the triangulator refuses is
+    deliberate: a surface that renders without its mask is wrong, but a
+    surface that renders as nothing at all is a black hole in the show.
+    """
+    if len(outer) < 3:
+        return list(outer), []
+    if not holes:
+        return list(outer), triangulate_polygon(outer)
+    if earcut is None:
+        return list(outer), _fan_triangulation(len(outer))
+
+    combined = list(outer)
+    rings = [len(outer)]
+    for hole in holes:
+        if len(hole) < 3:
+            continue
+        combined.extend(hole)
+        rings.append(len(combined))
+
+    if len(rings) == 1:
+        return list(outer), triangulate_polygon(outer)
+
+    try:
+        indices = earcut.triangulate_float32(
+            np.array(combined, dtype=np.float32),
+            np.array(rings, dtype=np.uint32),
+        )
+        return combined, list(map(int, indices))
+    except Exception:
+        return list(outer), triangulate_polygon(outer)
+
+
 def curve_from_anchors(points: List[Tuple[float, float]], samples_per_seg: int = 12) -> List[Tuple[float, float]]:
     if len(points) < 3:
         return list(points)
@@ -167,6 +209,28 @@ def curve_from_anchors(points: List[Tuple[float, float]], samples_per_seg: int =
             )
             out.append((float(x), float(y)))
     return out
+
+
+def circle_ring(
+    center: Tuple[float, float],
+    radius_x: float,
+    radius_y: float,
+    segments: int = 48,
+) -> List[Tuple[float, float]]:
+    """The ellipse's boundary alone, with no centre vertex.
+
+    `triangulate_circle` fans from the centre, which is faster but is not a
+    simple ring - and a hole has to be cut out of a simple ring.
+    """
+    segments = max(12, int(segments))
+    cx, cy = center
+    rx = max(float(radius_x), 1.0)
+    ry = max(float(radius_y), 1.0)
+    two_pi = 2.0 * 3.141592653589793
+    return [
+        (float(cx + rx * np.cos(i / segments * two_pi)), float(cy + ry * np.sin(i / segments * two_pi)))
+        for i in range(segments)
+    ]
 
 
 def triangulate_circle(
