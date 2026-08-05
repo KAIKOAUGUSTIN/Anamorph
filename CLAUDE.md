@@ -35,6 +35,8 @@ python projection_gui.py
   - `effects.py` - Effects (pulse, strobe, RGB shift) with parameters
   - `commands.py` - Undoable edits as `QUndoCommand`s, plus `EditSession` for turning a drag into one step
   - `snapping.py` - Magnetic snap search (vertex, then edge, then grid); pure geometry
+  - `output.py` - `Output` (canvas region, keystone, `EdgeBlend`, `ColorCorrection`) and `split_outputs`
+  - `project_store.py` - Loads/saves the one session project; migrates the old per-screen workspaces
 
 - `pm/ui/` - Qt6/PySide6 UI components
   - `main_window.py` - Central window with toolbar, splitter layout, menus, and screen selection
@@ -43,6 +45,7 @@ python projection_gui.py
   - `property_panel.py` - Property editing UI for selected shape
   - `object_list.py` - Layer list with visibility, lock marker and Solo
   - `source_region.py` - Draggable rectangle over the media thumbnail, for picking the input region
+  - `output_panel.py` - `OutputDialog`: per-projector region, keystone, blend and colour
 - `styles.py` - Studio Dark Luxury theme with cyan accents; provides `STUDIO_DARK_QSS` stylesheet and `COLORS` palette for consistent UI styling
 - `widgets.py` - Custom keyboard-friendly widgets: `ArrowSlider`, `ArrowSpinBox` for arrow key navigation
 
@@ -75,7 +78,13 @@ python projection_gui.py
 
    The editor mirrors this with `QTransform.quadToQuad` in `canvas_editor._paint_media`, so the canvas preview and the projected output agree. Corner-to-UV pairing is by proximity to the bounding box (`corner_uv_assignment`), not vertex index, so the media stays put while a corner is dragged.
 
-4. **Multi-screen**: Projection can target specific displays via `QGuiApplication.screens()`; canvas resolution auto-adjusts to selected screen
+4. **One canvas, many projectors**: A `Project` has one canvas and a list of `Output`s. Each output is one projector's view of *part* of that canvas, carrying its own keystone, edge blend and colour. Screens used to own a whole `Project` each, which made two projectors two separate artworks and left soft-edge with nothing to blend.
+
+   Rendering is two passes (`GLRenderer.paintGL`): the canvas is composited into a framebuffer once, then each output draws that texture through its corrections. Doing it per shape would be wrong, not just slower - a blend ramp must attenuate the *finished* image, or two surfaces overlapping inside the strip each get darkened and the seam turns into a dark patch.
+
+   The blend ramp is an S-curve, not `pow(t, k)`. Facing projectors see `t` and `1-t`, and only the S-curve sums to exactly 1 for any exponent; anything else leaves a bright or dark band down the seam. The exponent stays adjustable because projectors are not linear.
+
+   The canvas pass inverts Y into the framebuffer, so the output pass samples `1 - v`. Without that the projection comes out vertically mirrored - invisible on a symmetric test pattern.
 
 5. **Gestures, not modes**: There is no Points/Scale/Rotate mode any more - a trip to the toolbar mid-show is a trip nobody has time for. Vertices are always on show for the selected shape, and the body of the shape carries the transforms:
    - Drag the body: move. `Shift` locks to one axis
@@ -103,10 +112,17 @@ Projects saved as JSON with `.pmap.json` extension containing:
 - Canvas dimensions and background color
 - Shapes array with full state (points, colors, media, effects)
 - Media library paths
+- `outputs`: one entry per projector (region, keystone corners, blend, colour)
 - UI state (`last_projection_screen_id`, `test_mode`, `test_pattern`)
 
 `media.source_rect` is absent from files written before input space existed; that
-reads back as the full frame, so old projects open unchanged.
+reads back as the full frame, so old projects open unchanged. Likewise a file
+with no `outputs` gets one full-frame output aimed at `last_projection_screen_id`.
+
+The old per-screen `*.workspace.json` files are folded into a single project on
+first run by `ProjectStore._migrate_legacy_workspaces`: the workspace with the
+most shapes becomes the artwork, every screen that had one becomes an output,
+and the originals are left on disk so a bad merge is recoverable by hand.
 
 `Project.dirty` is set by `touch()` and cleared by `mark_saved()`, which every
 save and load path calls. It is what the unsaved-changes prompt reads - do not
@@ -124,7 +140,7 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 - **Snap** - Magnetic snapping of dragged vertices to other surfaces
 - **Project** - Toggle fullscreen projection to selected screen
 - **Test Mode** + pattern dropdown - Replace the output with a calibration pattern
-- **Screen dropdown** - Select target display for projection
+- **Outputs...** - Per-projector calibration: canvas region, keystone, edge blend, colour. `Tile` lays out N projectors pre-overlapped with matching ramps
 
 ### Keyboard Shortcuts
 - `Ctrl+Z` / `Ctrl+Shift+Z` (or `Ctrl+Y`) - Undo / redo
@@ -159,6 +175,9 @@ pytest
 - `tests/test_source_region.py` - input space value type, persistence, panel wiring
 - `tests/test_project_integrity.py` - discard prompts, workspace registration, undoable visibility
 - `tests/test_video_player.py` - playback pacing and shutdown (writes a real clip via OpenCV)
+- `tests/test_outputs.py` - blend-curve complementarity, tiling, clamping, output persistence
+- `tests/test_project_store.py` - session round trip and legacy workspace migration
+- `tests/test_output_ui.py` - the outputs dialog and one projection window per enabled output
 
 Rendering itself is not covered by the suite: `QOpenGLWidget` refuses to create a
 context on the `offscreen` platform. To check the actual output, run under a real
@@ -170,5 +189,7 @@ compare `GLRenderer.grabFramebuffer()` against the editor preview.
 - **Canvas Y is inverted in the vertex shader.** Canvas coordinates grow downward to match the editor; NDC grows upward. Removing that inversion mirrors the projection against what the user is editing.
 - Media fit modes serialize as `stretch`/`contain`/`cover`/`warp`. The combo box shows friendlier labels and keeps the serialized value in `userData` - do not switch back to reading `currentText()`, it would break existing `.pmap.json` files.
 - A dirty project prompts before New/Open/Quit. Tests that close a `MainWindow` must call `project.mark_saved()` first, or the modal blocks with nobody to answer it.
+- `MainWindow` restores the last session from the platform's app data directory on construction and writes it back on close. `tests/conftest.py` wipes that directory **per test** - the leak happens inside a single run, not just between runs.
+- `_sync_projection_windows` only opens anything while `_projecting` is set. Editing outputs with the show stopped must not start it.
 - `MediaTransform` offsets are in **source pixels** (matching the property panel's range and step); the renderer converts them to UV units against the media size, and rotation is degrees about the media centre.
 - Widgets added to a layout at runtime need `setParent(None)` before `deleteLater()`, and the panel needs `updateGeometry()` afterwards. Without the first, stale rows keep painting where they were; without the second, the enclosing scroll area keeps the old height and clips them.
