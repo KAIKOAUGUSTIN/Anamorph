@@ -255,12 +255,10 @@ class VertexHandle(QGraphicsEllipseItem):
 
 
 class PolygonItem(QGraphicsPathItem):
-    def __init__(self, model: PolygonShape, on_moved=None) -> None:
+    def __init__(self, model: PolygonShape) -> None:
         super().__init__()
         self.model = model
-        self._on_moved = on_moved
         self.handles: List[VertexHandle] = []
-        self._drag_value = QPointF(0, 0)
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
         self.setBrush(QBrush(QColor(*model.fill_color)))
         self.setPen(QPen(QColor(*model.stroke_color), max(model.stroke_width, 1.0)))
@@ -310,32 +308,12 @@ class PolygonItem(QGraphicsPathItem):
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(self.path())
-    def itemChange(self, change, value):
-        if change == QGraphicsItem.ItemPositionChange:
-            if self.model.locked:
-                self._drag_value = QPointF(value.x(), value.y())
-                return QPointF(0, 0)
-            delta = value - self._drag_value
-            if delta.x() != 0 or delta.y() != 0:
-                self.model.points = [(x + delta.x(), y + delta.y()) for x, y in self.model.points]
-                self._drag_value = QPointF(value.x(), value.y())
-                self.update_path()
-                if self._on_moved:
-                    self._on_moved()
-            return QPointF(0, 0)
-        return super().itemChange(change, value)
-
-    def reset_drag(self) -> None:
-        self._drag_value = QPointF(0, 0)
-
 
 class CircleItem(QGraphicsEllipseItem):
-    def __init__(self, model: CircleShape, on_moved=None) -> None:
+    def __init__(self, model: CircleShape) -> None:
         super().__init__()
         self.model = model
-        self._on_moved = on_moved
         self.handles: List[VertexHandle] = []
-        self._drag_value = QPointF(0, 0)
         self.handle_angle = -math.pi / 2.0
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
         self.setBrush(QBrush(QColor(*model.fill_color)))
@@ -396,31 +374,9 @@ class CircleItem(QGraphicsEllipseItem):
         painter.setPen(QPen(QColor(0, 212, 170, 120), 1.0))
         painter.drawLine(cx, cy, x, y)
 
-    def itemChange(self, change, value):
-        if change == QGraphicsItem.ItemPositionChange:
-            if self.model.locked:
-                self._drag_value = QPointF(value.x(), value.y())
-                return QPointF(0, 0)
-            delta = value - self._drag_value
-            if delta.x() != 0 or delta.y() != 0:
-                self.model.center = (self.model.center[0] + delta.x(), self.model.center[1] + delta.y())
-                if self.model.anchors:
-                    self.model.anchors = [(p[0] + delta.x(), p[1] + delta.y()) for p in self.model.anchors]
-                self._drag_value = QPointF(value.x(), value.y())
-                self.update_rect()
-                if self._on_moved:
-                    self._on_moved()
-            return QPointF(0, 0)
-        return super().itemChange(change, value)
-
-    def reset_drag(self) -> None:
-        self._drag_value = QPointF(0, 0)
-
-
 class CanvasEditor(QGraphicsView):
     selection_changed = Signal(object)
     zoom_changed = Signal(float)
-    edit_mode_changed = Signal(str)
 
     # Magnet radius in screen pixels, divided by the zoom before use so it
     # feels constant to the hand rather than to the scene.
@@ -440,13 +396,9 @@ class CanvasEditor(QGraphicsView):
         self._last_canvas = (project.canvas.width, project.canvas.height)
         self._panning = False
         self._pan_last: Optional[QPointF] = None
-        self._edit_mode = "points"
-        self._scale_state = {}
-        self._rotate_state = {}
         self._circle_drag_state = {}
 
         self.tool = "select"
-        self._items_movable = False
 
         self.undo_stack: Optional[QUndoStack] = None
         self._session: Optional[EditSession] = None
@@ -591,23 +543,6 @@ class CanvasEditor(QGraphicsView):
             self.setDragMode(QGraphicsView.NoDrag)
             self.viewport().setCursor(Qt.CrossCursor)
         self.setFocus(Qt.OtherFocusReason)
-        if tool != "select":
-            self._set_items_movable(False)
-        if tool != "select":
-            self.set_edit_mode("points")
-
-    def set_edit_mode(self, mode: str) -> None:
-        if mode not in ("points", "scale", "rotate"):
-            mode = "points"
-        if self._edit_mode == mode:
-            return
-        self._edit_mode = mode
-        item = self._current_selected_item()
-        if item and mode == "points" and isinstance(item, CircleItem):
-            self._ensure_circle_anchors(item.model)
-        if item:
-            self._set_handles_for_item(item)
-        self.edit_mode_changed.emit(self._edit_mode)
 
     def set_zoom(self, zoom: float) -> None:
         zoom = max(0.1, min(4.0, zoom))
@@ -668,15 +603,13 @@ class CanvasEditor(QGraphicsView):
 
     def _create_item(self, shape: Shape):
         if isinstance(shape, PolygonShape):
-            item = PolygonItem(shape, on_moved=self._on_shape_moved)
+            item = PolygonItem(shape)
             item.setVisible(shape.visible)
-            item.setFlag(QGraphicsItem.ItemIsMovable, self._items_movable)
             self._create_point_handles(item)
             return item
         if isinstance(shape, CircleShape):
-            item = CircleItem(shape, on_moved=self._on_shape_moved)
+            item = CircleItem(shape)
             item.setVisible(shape.visible)
-            item.setFlag(QGraphicsItem.ItemIsMovable, self._items_movable)
             self._create_circle_point_handles(item)
             return item
         raise ValueError("Shape desconhecido")
@@ -686,13 +619,11 @@ class CanvasEditor(QGraphicsView):
             item.update_path()
             item.sync_style()
             item.setVisible(shape.visible)
-            item.setFlag(QGraphicsItem.ItemIsMovable, self._items_movable)
             self._update_mode_handles(item)
         elif isinstance(item, CircleItem):
             item.update_rect()
             item.sync_style()
             item.setVisible(shape.visible)
-            item.setFlag(QGraphicsItem.ItemIsMovable, self._items_movable)
             self._update_mode_handles(item)
 
     def _clear_handles(self, item) -> None:
@@ -797,84 +728,6 @@ class CanvasEditor(QGraphicsView):
                 (cx - rx, cy),
             ]
 
-    def _create_scale_handles(self, item: PolygonItem) -> None:
-        self._clear_handles(item)
-        for idx in range(4):
-            handle = VertexHandle(item, idx, self._on_scale_handle_moved, None, self._on_scale_handle_pressed)
-            handle.setParentItem(item)
-            handle.setVisible(False)
-            item.handles.append(handle)
-        self._update_scale_handles(item)
-
-    def _update_scale_handles(self, item: PolygonItem) -> None:
-        points = item.model.points
-        if not points:
-            return
-        xs = [p[0] for p in points]
-        ys = [p[1] for p in points]
-        minx, maxx = min(xs), max(xs)
-        miny, maxy = min(ys), max(ys)
-        positions = [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]
-        for handle, pos in zip(item.handles, positions):
-            handle.set_pos_silent(pos[0], pos[1])
-        visible = item.isSelected()
-        for handle in item.handles:
-            handle.setVisible(visible)
-
-    def _create_circle_scale_handles(self, item: CircleItem) -> None:
-        self._clear_handles(item)
-        count = max(4, int(getattr(item.model, "control_points", 4)))
-        if count % 2 != 0:
-            count += 1
-        for idx in range(count):
-            handle = VertexHandle(item, idx, self._on_circle_scale_handle_moved, None, self._on_circle_scale_handle_pressed)
-            handle.setParentItem(item)
-            handle.setVisible(False)
-            item.handles.append(handle)
-        self._update_circle_scale_handles(item)
-
-    def _update_circle_scale_handles(self, item: CircleItem) -> None:
-        count = max(4, int(getattr(item.model, "control_points", 4)))
-        if count % 2 != 0:
-            count += 1
-        if len(item.handles) != count:
-            self._create_circle_scale_handles(item)
-            return
-        cx, cy = item.model.center
-        rx = max(item.model.radius_x, 1.0)
-        ry = max(item.model.radius_y, 1.0)
-        for idx, handle in enumerate(item.handles):
-            angle = (idx / count) * (2.0 * 3.141592653589793)
-            x = cx + rx * math.cos(angle)
-            y = cy + ry * math.sin(angle)
-            handle.set_pos_silent(float(x), float(y))
-        visible = item.isSelected()
-        for handle in item.handles:
-            handle.setVisible(visible)
-
-    def _create_rotate_handle(self, item) -> None:
-        self._clear_handles(item)
-        handle = VertexHandle(
-            item,
-            0,
-            self._on_rotate_handle_moved,
-            lambda p, o=item: self._rotate_snap(o, p),
-            self._on_rotate_handle_pressed,
-        )
-        handle.setParentItem(item)
-        handle.setVisible(False)
-        item.handles.append(handle)
-        self._update_rotate_handle(item)
-
-    def _update_rotate_handle(self, item) -> None:
-        if not item.handles:
-            return
-        pos = self._rotate_snap(item, item.handles[0].pos())
-        item.handles[0].set_pos_silent(pos.x(), pos.y())
-        visible = item.isSelected()
-        for handle in item.handles:
-            handle.setVisible(visible)
-
     def _on_handle_moved(self, owner: PolygonItem, index: int, pos: QPointF) -> None:
         shape = owner.model
         if shape.locked:
@@ -938,170 +791,6 @@ class CanvasEditor(QGraphicsView):
         self.project.touch()
 
 
-    def _rotate_snap(self, owner, pos: QPointF) -> QPointF:
-        if isinstance(owner, PolygonItem):
-            points = owner.model.points
-            if not points:
-                return pos
-            xs = [p[0] for p in points]
-            ys = [p[1] for p in points]
-            minx, maxx = min(xs), max(xs)
-            miny, maxy = min(ys), max(ys)
-            cx = (minx + maxx) / 2.0
-            cy = (miny + maxy) / 2.0
-            radius = max((maxy - miny) / 2.0, 1.0) + 30.0
-        elif isinstance(owner, CircleItem):
-            cx, cy = owner.model.center
-            radius = max(owner.model.radius_y, 1.0) + 30.0
-        else:
-            return pos
-        angle = math.atan2(pos.y() - cy, pos.x() - cx)
-        return QPointF(cx + math.cos(angle) * radius, cy + math.sin(angle) * radius)
-
-    def _on_scale_handle_pressed(self, owner: PolygonItem, index: int, pos: QPointF) -> None:
-        points = list(owner.model.points)
-        if not points:
-            return
-        xs = [p[0] for p in points]
-        ys = [p[1] for p in points]
-        center = ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0)
-        scene_pos = owner.mapToScene(pos)
-        sx = scene_pos.x() - center[0]
-        sy = scene_pos.y() - center[1]
-        self._scale_state = {
-            "owner": owner,
-            "points": points,
-            "center": center,
-            "start_vec": (sx, sy),
-        }
-
-    def _on_scale_handle_moved(self, owner: PolygonItem, index: int, pos: QPointF) -> None:
-        state = self._scale_state
-        if not state or state.get("owner") != owner:
-            return
-        cx, cy = state["center"]
-        sx, sy = state["start_vec"]
-        scene_pos = owner.mapToScene(pos)
-        nx = scene_pos.x() - cx
-        ny = scene_pos.y() - cy
-        EPSILON = 1e-4
-        scale_x = nx / sx if abs(sx) > EPSILON else 1.0
-        scale_y = ny / sy if abs(sy) > EPSILON else 1.0
-        scale_x = max(0.1, abs(scale_x))
-        scale_y = max(0.1, abs(scale_y))
-        new_points = []
-        for px, py in state["points"]:
-            new_x = cx + (px - cx) * scale_x
-            new_y = cy + (py - cy) * scale_y
-            new_points.append((new_x, new_y))
-        owner.model.points = new_points
-        owner.update_path()
-        self._update_scale_handles(owner)
-        self.project.touch()
-
-    def _on_circle_scale_handle_pressed(self, owner: CircleItem, index: int, pos: QPointF) -> None:
-        cx, cy = owner.model.center
-        scene_pos = owner.mapToScene(pos)
-        sx = scene_pos.x() - cx
-        sy = scene_pos.y() - cy
-        start_len = (sx * sx + sy * sy) ** 0.5
-        self._scale_state = {
-            "owner": owner,
-            "center": (cx, cy),
-            "radius": max(owner.model.radius_x, owner.model.radius_y, 1.0),
-            "start_len": start_len,
-        }
-
-    def _on_circle_scale_handle_moved(self, owner: CircleItem, index: int, pos: QPointF) -> None:
-        state = self._scale_state
-        if not state or state.get("owner") != owner:
-            return
-        cx, cy = state["center"]
-        scene_pos = owner.mapToScene(pos)
-        nx = scene_pos.x() - cx
-        ny = scene_pos.y() - cy
-        new_len = (nx * nx + ny * ny) ** 0.5
-        start_len = state.get("start_len", 0.0)
-        scale = new_len / start_len if start_len > 1e-4 else 1.0
-        scale = max(0.1, abs(scale))
-        radius = max(1.0, state["radius"] * scale)
-        owner.model.radius_x = radius
-        owner.model.radius_y = radius
-        owner.update_rect()
-        self._update_circle_scale_handles(owner)
-        self._update_circle_point_handles(owner)
-        self.project.touch()
-
-    def _on_rotate_handle_pressed(self, owner, index: int, pos: QPointF) -> None:
-        if isinstance(owner, PolygonItem):
-            points = list(owner.model.points)
-            if not points:
-                return
-            xs = [p[0] for p in points]
-            ys = [p[1] for p in points]
-            center = ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0)
-            scene_pos = owner.mapToScene(pos)
-            angle = math.atan2(scene_pos.y() - center[1], scene_pos.x() - center[0])
-            self._rotate_state = {
-                "owner": owner,
-                "points": points,
-                "center": center,
-                "start_angle": angle,
-            }
-        elif isinstance(owner, CircleItem):
-            cx, cy = owner.model.center
-            scene_pos = owner.mapToScene(pos)
-            angle = math.atan2(scene_pos.y() - cy, scene_pos.x() - cx)
-            start_rot = 0.0
-            if owner.model.media:
-                start_rot = float(owner.model.media.transform.rotation)
-            self._rotate_state = {
-                "owner": owner,
-                "center": (cx, cy),
-                "start_angle": angle,
-                "start_rotation": start_rot,
-                "start_handle_angle": getattr(owner, "handle_angle", -math.pi / 2.0),
-            }
-
-    def _on_rotate_handle_moved(self, owner, index: int, pos: QPointF) -> None:
-        state = self._rotate_state
-        if not state or state.get("owner") != owner:
-            return
-        cx, cy = state["center"]
-        scene_pos = owner.mapToScene(pos)
-        angle = math.atan2(scene_pos.y() - cy, scene_pos.x() - cx)
-        delta = angle - state["start_angle"]
-        if isinstance(owner, PolygonItem):
-            cos_a = math.cos(delta)
-            sin_a = math.sin(delta)
-            new_points = []
-            for px, py in state["points"]:
-                dx = px - cx
-                dy = py - cy
-                new_x = cx + (dx * cos_a - dy * sin_a)
-                new_y = cy + (dx * sin_a + dy * cos_a)
-                new_points.append((new_x, new_y))
-            owner.model.points = new_points
-            owner.update_path()
-            self.project.touch()
-        elif isinstance(owner, CircleItem):
-            owner.handle_angle = state.get("start_handle_angle", -math.pi / 2.0) + delta
-            owner.update()
-            self._update_circle_point_handles(owner)
-            if owner.model.media:
-                owner.model.media.transform.rotation = state["start_rotation"] + math.degrees(delta)
-            self.project.touch()
-        self._update_rotate_handle(owner)
-
-    def _on_shape_moved(self) -> None:
-        item = self._current_polygon_item()
-        if item:
-            self._update_mode_handles(item)
-        circle_item = self._current_circle_item()
-        if circle_item:
-            self._update_mode_handles(circle_item)
-        self.project.touch()
-
     def _current_polygon_item(self) -> Optional[PolygonItem]:
         for item in self.scene.selectedItems():
             if isinstance(item, PolygonItem):
@@ -1118,12 +807,6 @@ class CanvasEditor(QGraphicsView):
             return item.parentItem()
         return self._current_polygon_item()
 
-    def _current_circle_item(self) -> Optional[CircleItem]:
-        for item in self.scene.selectedItems():
-            if isinstance(item, CircleItem):
-                return item
-        return None
-
     def select_shape(self, shape_id: Optional[str]) -> None:
         for item in self.scene.selectedItems():
             item.setSelected(False)
@@ -1132,12 +815,6 @@ class CanvasEditor(QGraphicsView):
         item = self.items_by_id.get(shape_id)
         if item:
             item.setSelected(True)
-
-    def _set_items_movable(self, enabled: bool) -> None:
-        self._items_movable = enabled
-        for item in self.items_by_id.values():
-            if isinstance(item, (PolygonItem, CircleItem)):
-                item.setFlag(QGraphicsItem.ItemIsMovable, enabled)
 
     def set_shape_visibility(self, shape_id: str, visible: bool) -> None:
         item = self.items_by_id.get(shape_id)
@@ -1181,7 +858,6 @@ class CanvasEditor(QGraphicsView):
             self._sync_items()
             self.select_shape(shape.id)
             self.set_tool("select")
-            self._edit_mode = "points"
             return
         super().mousePressEvent(event)
 
@@ -1213,7 +889,7 @@ class CanvasEditor(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:
-        if self.tool == "select" and self._edit_mode == "points":
+        if self.tool == "select":
             scene_pos = self._snap_point(self.mapToScene(event.position().toPoint()))
             item = self._polygon_item_at(event.position().toPoint())
             if item:
@@ -1233,9 +909,6 @@ class CanvasEditor(QGraphicsView):
             self._pan_last = None
         if self.tool == "select" and event.button() == Qt.LeftButton:
             self.setDragMode(QGraphicsView.NoDrag)
-            self._reset_item_drag()
-            self._scale_state = {}
-            self._rotate_state = {}
             self._circle_drag_state = {}
             label = self.GESTURE_LABELS.get(self._body_drag.get("mode")) if self._body_drag else None
             self._end_body_drag()
@@ -1443,17 +1116,6 @@ class CanvasEditor(QGraphicsView):
         shape = polygon_from_points(points, name=name)
         return shape
 
-    def _create_default_circle_poly(self, center: QPointF, size: float, name: str) -> PolygonShape:
-        half = size / 2.0
-        points = [
-            (center.x(), center.y() - half),
-            (center.x() + half, center.y()),
-            (center.x(), center.y() + half),
-            (center.x() - half, center.y()),
-        ]
-        shape = polygon_from_points(points, name=name)
-        return shape
-
     def _insert_vertex(self, item: PolygonItem, point: QPointF) -> bool:
         points = item.model.points
         if len(points) < 2:
@@ -1538,11 +1200,6 @@ class CanvasEditor(QGraphicsView):
             self._update_point_handles(item)
         elif isinstance(item, CircleItem):
             self._update_circle_point_handles(item)
-
-    def _reset_item_drag(self) -> None:
-        for item in self.items_by_id.values():
-            if hasattr(item, "reset_drag"):
-                item.reset_drag()
 
     def _snap_point(self, point: QPointF) -> QPointF:
         grid = self.scene.grid_size
