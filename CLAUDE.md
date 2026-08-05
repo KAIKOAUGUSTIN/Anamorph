@@ -85,6 +85,8 @@ python projection_gui.py
 
    All three run through `CanvasEditor._update_body_drag` rather than Qt's `ItemIsMovable`, which is what lets `Shift` mean "constrain" instead of "move this time".
 
+   A selected shape also gets a dashed bounding box with four `TransformHandle` grips at its corners and a rotate grip above it. They force their own gesture and drive the same `_apply_body_scale`/`_apply_body_rotate` - there is one implementation of each transform, not two. They exist for discoverability: a modifier with no visible affordance is a feature only the manual can tell you about.
+
 6. **Undo**: Commands are snapshot-based (`pm/model/commands.py`), storing a shape's serialised state before and after an edit and swapping them - shapes are mutated in place during a drag, so there is no inverse to replay. `EditSession` snapshots on mouse press and pushes on release, making a drag one undo step; `ShapeEditCommand.mergeWith` collapses same-labelled edits to the same shape within a short window, which is what keeps a slider drag from filling the stack.
 
    Anything that mutates a shape must go through a command, or it will be silently un-undoable. In the property panel that means calling `self._commit("Label")` instead of emitting `shape_changed` directly.

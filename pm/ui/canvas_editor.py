@@ -42,6 +42,9 @@ class CanvasScene(QGraphicsScene):
         # Set while a drag is latched onto another surface; drawn last so the
         # user can see the magnet engage under the cursor.
         self.snap_marker: Optional[QPointF] = None
+        # Bounding box of the selection, and where its rotate grip floats.
+        self.transform_box: Optional[QRectF] = None
+        self.transform_pivot: Optional[QPointF] = None
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
         super().drawBackground(painter, rect)
@@ -89,11 +92,28 @@ class CanvasScene(QGraphicsScene):
 
     def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
         super().drawForeground(painter, rect)
+        scale = painter.worldTransform().m11() or 1.0
+
+        # The box itself, so the grips read as corners of something rather
+        # than as four unexplained dots floating near the shape.
+        if self.transform_box is not None:
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(150, 150, 160, 130), 1.0 / scale, Qt.DashLine))
+            painter.drawRect(self.transform_box)
+            if self.transform_pivot is not None:
+                painter.setPen(QPen(QColor(255, 176, 46, 150), 1.0 / scale))
+                painter.drawLine(
+                    QPointF(self.transform_pivot.x(), self.transform_box.top()),
+                    self.transform_pivot,
+                )
+            painter.restore()
+
         if self.snap_marker is None:
             return
         # Sized in scene units against the current zoom so the ring stays the
         # same size on screen however far in the user is.
-        scale = painter.worldTransform().m11() or 1.0
         radius = 9.0 / scale
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
@@ -189,6 +209,52 @@ def _warp_transform(shape: PolygonShape, image: QImage, region) -> Optional[QTra
     # Returns None when the quad has collapsed - self-crossing corners, or a
     # shape dragged flat.
     return QTransform.quadToQuad(source, target)
+
+
+class TransformHandle(QGraphicsEllipseItem):
+    """A bounding-box grip that scales or rotates the shape it belongs to.
+
+    Alt and Ctrl on the body do the same job for anyone who knows they exist.
+    These are how you find out they exist: a modifier with no visible
+    affordance is a feature only the manual can tell you about.
+
+    They drive `_apply_body_scale` / `_apply_body_rotate` through the same
+    body-drag state the keyboard-modifier path uses, so there is one
+    implementation of each transform, not two.
+    """
+
+    SIZE = 9.0
+
+    def __init__(self, view, item, mode: str) -> None:
+        half = self.SIZE / 2.0
+        super().__init__(-half, -half, self.SIZE, self.SIZE)
+        self.view = view
+        self.item = item
+        self.mode = mode
+
+        if mode == "rotate":
+            self.setBrush(QBrush(QColor(255, 176, 46)))
+            self.setPen(QPen(QColor(168, 108, 12), 1.5))
+            self.setToolTip("Drag to rotate (Alt-drag the shape does the same)")
+        else:
+            self.setBrush(QBrush(QColor(235, 235, 240)))
+            self.setPen(QPen(QColor(90, 90, 100), 1.5))
+            self.setToolTip("Drag to scale (Ctrl-drag the shape does the same)")
+
+        self.setZValue(11)
+        self.setCursor(Qt.SizeAllCursor if mode == "rotate" else Qt.SizeFDiagCursor)
+
+    def mousePressEvent(self, event) -> None:
+        self.view._begin_body_drag(self.item, event.scenePos(), event.modifiers(), mode=self.mode)
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        self.view._update_body_drag(event.scenePos(), event.modifiers())
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        self.view._release_transform_handle()
+        event.accept()
 
 
 class VertexHandle(QGraphicsEllipseItem):
@@ -407,6 +473,7 @@ class CanvasEditor(QGraphicsView):
         # that corner instead of the whole surface.
         self._active_vertex: Optional[Tuple[object, int]] = None
         self._body_drag: Dict[str, object] = {}
+        self._transform_handles: List[TransformHandle] = []
         self.setFocusPolicy(Qt.StrongFocus)
 
         self.items_by_id: Dict[str, object] = {}
@@ -826,7 +893,13 @@ class CanvasEditor(QGraphicsView):
             hit_item = self.itemAt(event.position().toPoint())
             body = self._body_item_at(hit_item)
 
-            if isinstance(hit_item, VertexHandle):
+            if isinstance(hit_item, TransformHandle):
+                self.setDragMode(QGraphicsView.NoDrag)
+                # Snapshot here: the handle's own press starts the gesture,
+                # and by then Qt has stopped delivering to the view.
+                self._begin_edit_for(hit_item.item)
+                self._active_vertex = None
+            elif isinstance(hit_item, VertexHandle):
                 self.setDragMode(QGraphicsView.NoDrag)
                 # Snapshot before Qt starts delivering move events.
                 self._begin_edit_for(hit_item)
@@ -961,14 +1034,16 @@ class CanvasEditor(QGraphicsView):
             return "scale"
         return "move"
 
-    def _begin_body_drag(self, item, scene_pos: QPointF, modifiers) -> None:
+    def _begin_body_drag(self, item, scene_pos: QPointF, modifiers, mode: Optional[str] = None) -> None:
         shape = item.model
         if shape.locked:
             self._body_drag = {}
             return
         self._body_drag = {
             "item": item,
-            "mode": self._body_gesture(modifiers),
+            # A bounding-box grip names its own gesture; a drag on the body
+            # reads it off the modifiers.
+            "mode": mode or self._body_gesture(modifiers),
             "start": (scene_pos.x(), scene_pos.y()),
             "centre": self._shape_centre(shape),
             "points": list(shape.points) if isinstance(shape, PolygonShape) else None,
@@ -1062,6 +1137,67 @@ class CanvasEditor(QGraphicsView):
 
     def _end_body_drag(self) -> None:
         self._body_drag = {}
+
+    def _release_transform_handle(self) -> None:
+        """Finish a drag that started on a bounding-box grip.
+
+        The view's own mouseReleaseEvent does not run for these, because the
+        handle accepted the press.
+        """
+        label = self.GESTURE_LABELS.get(self._body_drag.get("mode")) if self._body_drag else None
+        self._end_body_drag()
+        self._commit_edit(label)
+
+    # --- bounding box ----------------------------------------------------
+
+    # How far above the box the rotate grip floats, in screen pixels.
+    ROTATE_HANDLE_OFFSET_PX = 30.0
+
+    def _clear_transform_handles(self) -> None:
+        for handle in self._transform_handles:
+            self.scene.removeItem(handle)
+        self._transform_handles = []
+        self.scene.transform_box = None
+        self.scene.transform_pivot = None
+        self.scene.update()
+
+    def _build_transform_handles(self, item) -> None:
+        self._clear_transform_handles()
+        if item is None or item.model.locked:
+            return
+        for mode in ("scale", "scale", "scale", "scale", "rotate"):
+            handle = TransformHandle(self, item, mode)
+            self.scene.addItem(handle)
+            self._transform_handles.append(handle)
+        self._update_transform_handles(item)
+
+    def _update_transform_handles(self, item) -> None:
+        if not self._transform_handles or item is None:
+            return
+
+        shape = item.model
+        if isinstance(shape, CircleShape):
+            cx, cy = shape.center
+            rx, ry = max(shape.radius_x, 1.0), max(shape.radius_y, 1.0)
+            minx, maxx, miny, maxy = cx - rx, cx + rx, cy - ry, cy + ry
+        else:
+            xs = [p[0] for p in shape.points]
+            ys = [p[1] for p in shape.points]
+            minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+
+        corners = [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]
+        for handle, (x, y) in zip(self._transform_handles[:4], corners):
+            handle.setPos(x, y)
+
+        # Offset in screen pixels, so the grip keeps its distance from the box
+        # whatever the zoom.
+        offset = self.ROTATE_HANDLE_OFFSET_PX / max(self._zoom, 1e-6)
+        pivot = QPointF((minx + maxx) / 2.0, miny - offset)
+        self._transform_handles[4].setPos(pivot)
+
+        self.scene.transform_box = QRectF(minx, miny, maxx - minx, maxy - miny)
+        self.scene.transform_pivot = pivot
+        self.scene.update()
 
     def _nudge(self, dx: float, dy: float) -> bool:
         """Move the active vertex, or the whole shape if no vertex is armed.
@@ -1166,8 +1302,10 @@ class CanvasEditor(QGraphicsView):
             if isinstance(item, (PolygonItem, CircleItem)):
                 self._set_handles_for_item(item)
                 item.set_handles_visible(True)
+                self._build_transform_handles(item)
                 self.selection_changed.emit(item.model)
                 return
+        self._clear_transform_handles()
         self.selection_changed.emit(None)
 
     def _current_selected_item(self):
@@ -1200,6 +1338,7 @@ class CanvasEditor(QGraphicsView):
             self._update_point_handles(item)
         elif isinstance(item, CircleItem):
             self._update_circle_point_handles(item)
+        self._update_transform_handles(item)
 
     def _snap_point(self, point: QPointF) -> QPointF:
         grid = self.scene.grid_size
