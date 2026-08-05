@@ -42,6 +42,12 @@ uniform mat3 u_uv_matrix;      // canvas -> UV homography (corner pin)
 uniform int u_uv_projective;   // 0 = per-vertex v_uv, 1 = u_uv_matrix
 uniform vec2 u_media_offset;   // shift in UV units
 uniform float u_media_rotation; // radians, about the media centre
+uniform int u_uv_clip;         // 1 = drop samples outside the media
+
+// Slack on the clip test. The corner-pin divide can land a hair outside the
+// unit square right on a quad's edge, and clipping that strictly would cut a
+// transparent hairline along every corner-pinned surface.
+const float UV_CLIP_EPS = 0.001;
 
 void main() {
     vec2 uv = v_uv;
@@ -66,6 +72,15 @@ void main() {
         uv = vec2(centred.x * c - centred.y * s, centred.x * s + centred.y * c) + 0.5;
     }
     uv -= u_media_offset;
+
+    // Anything outside the media is genuinely empty - the bars of a `contain`
+    // fit, or the gap revealed by panning. Discarding beats clamping, which
+    // would smear the edge row of pixels across them.
+    if (u_uv_clip == 1 &&
+        (uv.x < -UV_CLIP_EPS || uv.x > 1.0 + UV_CLIP_EPS ||
+         uv.y < -UV_CLIP_EPS || uv.y > 1.0 + UV_CLIP_EPS)) {
+        discard;
+    }
 
     // RGB shift effect
     if (u_rgb_shift.x > 0.001) {

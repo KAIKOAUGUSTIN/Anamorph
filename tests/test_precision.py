@@ -103,6 +103,68 @@ def test_circle_nudge_moves_centre_and_anchors(qapp):
     assert all(x >= 70.0 for x, _ in circle.anchors)
 
 
+def _circle_canvas(rx, ry):
+    from pm.ui.canvas_editor import CanvasEditor
+
+    project = Project()
+    circle = circle_from_center((200.0, 200.0), 50.0)
+    circle.radius_x, circle.radius_y = rx, ry
+    project.add_shape(circle)
+    canvas = CanvasEditor(project)
+    canvas.set_undo_stack(QUndoStack())
+    canvas.select_shape(circle.id)
+    return canvas, circle, canvas.items_by_id[circle.id]
+
+
+def test_handles_sit_on_the_ellipse_not_a_circle(qapp):
+    """A single max(rx, ry) radius left the handles floating off the outline."""
+    canvas, circle, item = _circle_canvas(120.0, 40.0)
+    cx, cy = circle.center
+
+    offsets = [(h.pos().x() - cx, h.pos().y() - cy) for h in item.handles]
+    distances = sorted(round((dx * dx + dy * dy) ** 0.5, 3) for dx, dy in offsets)
+
+    # Two handles at rx, two at ry - not four at max(rx, ry).
+    assert distances == [40.0, 40.0, 120.0, 120.0]
+
+
+def test_dragging_one_axis_leaves_the_other_alone(qapp):
+    from PySide6.QtCore import QPointF
+
+    canvas, circle, item = _circle_canvas(120.0, 40.0)
+    # Handle 1 rides the horizontal axis (handle_angle defaults to -pi/2).
+    canvas._on_circle_handle_pressed(item, 1, item.handles[1].pos())
+    canvas._on_circle_handle_moved(item, 1, QPointF(400.0, 200.0))
+
+    assert circle.radius_y == pytest.approx(40.0), "the untouched axis moved"
+    assert circle.radius_x != pytest.approx(120.0)
+
+
+def test_dragging_the_vertical_axis_leaves_the_horizontal_alone(qapp):
+    from PySide6.QtCore import QPointF
+
+    canvas, circle, item = _circle_canvas(120.0, 40.0)
+    canvas._on_circle_handle_pressed(item, 0, item.handles[0].pos())
+    canvas._on_circle_handle_moved(item, 0, QPointF(200.0, 20.0))
+
+    assert circle.radius_x == pytest.approx(120.0)
+    assert circle.radius_y != pytest.approx(40.0)
+
+
+def test_shift_keeps_a_circle_circular(qapp, monkeypatch):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QGuiApplication
+
+    canvas, circle, item = _circle_canvas(60.0, 60.0)
+    monkeypatch.setattr(
+        QGuiApplication, "keyboardModifiers", staticmethod(lambda: Qt.ShiftModifier)
+    )
+    canvas._on_circle_handle_pressed(item, 1, item.handles[1].pos())
+    canvas._on_circle_handle_moved(item, 1, QPointF(400.0, 200.0))
+
+    assert circle.radius_x == pytest.approx(circle.radius_y)
+
+
 def test_arming_a_vertex_clears_when_selection_moves_away(canvas):
     shape = canvas.project.shapes[0]
     other = polygon_from_points(list(QUAD), name="other")
