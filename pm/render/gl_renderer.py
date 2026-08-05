@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from OpenGL.GL import (
     GL_ARRAY_BUFFER, GL_BLEND, GL_CLAMP_TO_EDGE, GL_COLOR_BUFFER_BIT,
+    GL_FRAMEBUFFER, glBindFramebuffer,
     GL_COMPILE_STATUS, GL_DYNAMIC_DRAW, GL_ELEMENT_ARRAY_BUFFER, GL_FALSE,
     GL_FLOAT, GL_FRAGMENT_SHADER, GL_LINEAR, GL_LINK_STATUS,
     GL_RGBA, GL_SRC_ALPHA,
@@ -33,6 +34,7 @@ from OpenGL.GL import (
 from PIL import Image
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QImage
+from PySide6.QtOpenGL import QOpenGLFramebufferObject, QOpenGLFramebufferObjectFormat
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QWidget
 
@@ -40,13 +42,14 @@ from pm.media.video_player import VideoPlayer
 from pm.model.media import MediaRef
 from pm.model.project import Project
 from pm.model.shapes import CircleShape, PolygonShape, Shape
+from pm.model.output import Output
 from pm.render.fit import content_rect, leaves_unit_square
 from pm.render.homography import canvas_to_uv_matrix, corner_uv_assignment
 from pm.render.mesh import triangulate_circle, triangulate_polygon
 from pm.render.test_pattern import GRID, render_test_pattern
 from pm.render.shaders import (
-    FRAGMENT_SHADER_SOLID, FRAGMENT_SHADER_STROKE, FRAGMENT_SHADER_TEXTURE,
-    VERTEX_SHADER,
+    FRAGMENT_SHADER_OUTPUT, FRAGMENT_SHADER_SOLID, FRAGMENT_SHADER_STROKE,
+    FRAGMENT_SHADER_TEXTURE, VERTEX_SHADER, VERTEX_SHADER_OUTPUT,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,9 +58,17 @@ logger = logging.getLogger(__name__)
 class GLRenderer(QOpenGLWidget):
     """OpenGL-accelerated renderer for projection mapping."""
 
-    def __init__(self, project: Project, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        project: Project,
+        parent: Optional[QWidget] = None,
+        output: Optional[Output] = None,
+    ) -> None:
         super().__init__(parent)
         self.project = project
+        # An identity output is the whole canvas with no corrections, which is
+        # what the editor preview and a single-projector rig both want.
+        self.output = output or Output(name="Preview")
         self._start_time = time.perf_counter()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.update)
@@ -68,6 +79,9 @@ class GLRenderer(QOpenGLWidget):
         self._program_texture = None
         self._program_solid = None
         self._program_stroke = None
+        self._program_output = None
+        self._canvas_fbo: Optional[QOpenGLFramebufferObject] = None
+        self._canvas_fbo_size: Tuple[int, int] = (0, 0)
         self._vao = None
         self._vbo = None
         self._ebo = None
@@ -96,6 +110,8 @@ class GLRenderer(QOpenGLWidget):
             self._cleanup_textures()
             self._cleanup_buffers()
             self._cleanup_programs()
+            self._canvas_fbo = None
+            self._canvas_fbo_size = (0, 0)
 
     def _cleanup_textures(self) -> None:
         for tex_id, _ in self._image_cache.values():
@@ -124,6 +140,8 @@ class GLRenderer(QOpenGLWidget):
             glDeleteProgram(self._program_solid)
         if self._program_stroke:
             glDeleteProgram(self._program_stroke)
+        if self._program_output:
+            glDeleteProgram(self._program_output)
 
     def initializeGL(self) -> None:
         """Initialize OpenGL resources."""
@@ -135,14 +153,20 @@ class GLRenderer(QOpenGLWidget):
             frag_solid = self._compile_shader(FRAGMENT_SHADER_SOLID, GL_FRAGMENT_SHADER)
             frag_stroke = self._compile_shader(FRAGMENT_SHADER_STROKE, GL_FRAGMENT_SHADER)
 
+            vertex_output = self._compile_shader(VERTEX_SHADER_OUTPUT, GL_VERTEX_SHADER)
+            frag_output = self._compile_shader(FRAGMENT_SHADER_OUTPUT, GL_FRAGMENT_SHADER)
+
             self._program_texture = self._link_program(vertex_shader, frag_texture)
             self._program_solid = self._link_program(vertex_shader, frag_solid)
             self._program_stroke = self._link_program(vertex_shader, frag_stroke)
+            self._program_output = self._link_program(vertex_output, frag_output)
 
             glDeleteShader(vertex_shader)
             glDeleteShader(frag_texture)
             glDeleteShader(frag_solid)
             glDeleteShader(frag_stroke)
+            glDeleteShader(vertex_output)
+            glDeleteShader(frag_output)
 
             # Create VAO
             self._vao = glGenVertexArrays(1)
@@ -181,39 +205,135 @@ class GLRenderer(QOpenGLWidget):
         glViewport(0, 0, w, h)
 
     def paintGL(self) -> None:
-        """Render the scene."""
+        """Composite the canvas once, then show this projector's view of it.
+
+        Two passes, not one. Edge blending has to attenuate the *finished*
+        image: applied per shape, two surfaces overlapping inside the blend
+        strip would each be darkened, and the seam would show as a dark
+        patch instead of disappearing.
+        """
         if not self._gl_initialized:
             return
 
         try:
-            # Clear with background color
-            bg = self.project.canvas.background_color
-            glClearColor(bg[0] / 255.0, bg[1] / 255.0, bg[2] / 255.0, 1.0)
-            glClear(GL_COLOR_BUFFER_BIT)
-
             canvas_w = max(self.project.canvas.width, 1)
             canvas_h = max(self.project.canvas.height, 1)
 
-            now = time.perf_counter() - self._start_time
-
-            # Calibration replaces the scene rather than overlaying it: the
-            # point is to align the projector against known geometry, with
-            # nothing else on screen to confuse the eye.
-            if self.project.ui_state.get("test_mode"):
-                self._draw_test_pattern(canvas_w, canvas_h)
+            if not self._ensure_canvas_target(canvas_w, canvas_h):
+                # No framebuffer to composite into; draw straight to the
+                # widget so the editor preview still shows something.
+                self._render_canvas(canvas_w, canvas_h)
                 return
 
-            # Render shapes
-            for shape in self.project.shapes:
-                if not shape.visible:
-                    continue
-                self._render_shape(shape, canvas_w, canvas_h, now)
+            self._canvas_fbo.bind()
+            glViewport(0, 0, canvas_w, canvas_h)
+            self._render_canvas(canvas_w, canvas_h)
+            self._canvas_fbo.release()
 
-            # Render strokes
-            self._render_strokes(canvas_w, canvas_h)
+            # release() binds framebuffer 0, which is not this widget's
+            # target - QOpenGLWidget renders into one of its own.
+            glBindFramebuffer(GL_FRAMEBUFFER, self.defaultFramebufferObject())
+            ratio = self.devicePixelRatio()
+            glViewport(0, 0, int(self.width() * ratio), int(self.height() * ratio))
+            self._draw_output(self._canvas_fbo.texture())
 
         except Exception as e:
             logger.exception("Render error: %s", e)
+
+    def _render_canvas(self, canvas_w: int, canvas_h: int) -> None:
+        """Everything the artwork consists of, in canvas coordinates."""
+        bg = self.project.canvas.background_color
+        glClearColor(bg[0] / 255.0, bg[1] / 255.0, bg[2] / 255.0, 1.0)
+        glClear(GL_COLOR_BUFFER_BIT)
+
+        # Calibration replaces the scene rather than overlaying it: the point
+        # is to align the projector against known geometry, with nothing else
+        # on screen to confuse the eye.
+        if self.project.ui_state.get("test_mode"):
+            self._draw_test_pattern(canvas_w, canvas_h)
+            return
+
+        now = time.perf_counter() - self._start_time
+        for shape in self.project.shapes:
+            if not shape.visible:
+                continue
+            self._render_shape(shape, canvas_w, canvas_h, now)
+
+        self._render_strokes(canvas_w, canvas_h)
+
+    def _ensure_canvas_target(self, canvas_w: int, canvas_h: int) -> bool:
+        if self._canvas_fbo is not None and self._canvas_fbo_size == (canvas_w, canvas_h):
+            return True
+        if self._canvas_fbo is not None:
+            self._canvas_fbo = None
+
+        try:
+            fmt = QOpenGLFramebufferObjectFormat()
+            fmt.setAttachment(QOpenGLFramebufferObject.NoAttachment)
+            fbo = QOpenGLFramebufferObject(canvas_w, canvas_h, fmt)
+        except Exception as exc:  # pragma: no cover - driver dependent
+            logger.warning("Could not create canvas framebuffer: %s", exc)
+            return False
+
+        if not fbo.isValid():
+            logger.warning("Canvas framebuffer is not valid at %dx%d", canvas_w, canvas_h)
+            return False
+
+        self._canvas_fbo = fbo
+        self._canvas_fbo_size = (canvas_w, canvas_h)
+        return True
+
+    def _draw_output(self, canvas_texture: int) -> None:
+        """Draw the composited canvas through this projector's corrections."""
+        output = self.output
+        region = output.region.normalised()
+        blend = output.blend.normalised()
+        color = output.color.normalised()
+
+        glUseProgram(self._program_output)
+
+        # A quad covering the projector's whole frame, in 0..1.
+        vertices = [
+            0.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0,
+            1.0, 1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+        ]
+        indices = [0, 1, 2, 0, 2, 3]
+
+        glBindBuffer(GL_ARRAY_BUFFER, self._vbo)
+        glBufferData(GL_ARRAY_BUFFER, len(vertices) * 4, np.array(vertices, dtype=np.float32), GL_DYNAMIC_DRAW)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self._ebo)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, len(indices) * 4, np.array(indices, dtype=np.uint32), GL_DYNAMIC_DRAW)
+
+        def loc(name):
+            return glGetUniformLocation(self._program_output, name)
+
+        glUniform4f(loc("u_region"), region.u0, region.v0, region.width, region.height)
+
+        # Keystone reuses the corner-pin solver: the projector's warped frame
+        # maps back to the square the canvas was composited into.
+        matrix = canvas_to_uv_matrix(output.corners) if output.has_keystone() else None
+        if matrix is not None:
+            glUniform1i(loc("u_has_keystone"), 1)
+            glUniformMatrix3fv(loc("u_keystone"), 1, GL_TRUE, matrix.astype(np.float32))
+        else:
+            glUniform1i(loc("u_has_keystone"), 0)
+
+        glUniform4f(loc("u_blend"), blend.left, blend.right, blend.top, blend.bottom)
+        glUniform1f(loc("u_blend_gamma"), blend.gamma)
+
+        glUniform1f(loc("u_brightness"), color.brightness)
+        glUniform1f(loc("u_contrast"), color.contrast)
+        glUniform1f(loc("u_gamma"), color.gamma)
+        glUniform3f(loc("u_gain"), color.gain_r, color.gain_g, color.gain_b)
+
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, canvas_texture)
+        glUniform1i(loc("u_canvas"), 0)
+
+        glBindVertexArray(self._vao)
+        glDrawElements(GL_TRIANGLES, len(indices), GL_UNSIGNED_INT, None)
 
     def _render_shape(self, shape: Shape, canvas_w: float, canvas_h: float, now: float) -> None:
         """Render a single shape."""
