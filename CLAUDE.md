@@ -8,6 +8,8 @@ This is a Projection Mapping MVP application built with Python and PySide6. It a
 
 ## Running the Application
 
+Requires **Python 3.12+** - `numpy>=2.5.1` in requirements.txt has no build for older interpreters.
+
 ```bash
 # Install dependencies
 pip install -r requirements.txt
@@ -42,11 +44,14 @@ python projection_gui.py
 - `widgets.py` - Custom keyboard-friendly widgets: `ArrowSlider`, `ArrowSpinBox` for arrow key navigation
 
 - `pm/render/` - Rendering subsystem
-  - `gl_renderer.py` - QWidget-based renderer using QPainter (not raw OpenGL), handles media texture mapping via affine triangle transforms
+  - `gl_renderer.py` - `QOpenGLWidget` renderer with GLSL shaders; uploads media as GL textures and caches them per path
+  - `shaders.py` - GLSL sources: shared vertex shader plus texture/solid/stroke fragment shaders
+  - `homography.py` - Corner-pin math (numpy only, no Qt/GL), shared by the renderer and the editor preview
   - `mesh.py` - Triangulation using mapbox_earcut for polygon mesh generation
 
 - `pm/media/` - Media handling
   - `video_player.py` - OpenCV-based video playback with threading, looping, and RGB conversion
+  - `image_cache.py` - mtime-keyed QImage cache for the editor viewport (paint runs every frame)
 
 - `pm/io/` - Serialization
   - `project_io.py` - JSON save/load with `.pmap.json` extension
@@ -59,7 +64,11 @@ python projection_gui.py
    - `PolygonShape`: Variable points with per-edge visibility control
    - `CircleShape`: Elliptical with control points and anchor system
 
-3. **Media Mapping**: Achieved via per-triangle affine transformation computed by `_affine_from_triangles` in `gl_renderer.py`. UV coordinates computed based on fit mode.
+3. **Media Mapping**: UVs come from the shape's fit mode (`stretch`/`contain`/`cover`), computed per vertex in `_compute_fit_uvs`.
+
+   The `warp` fit mode - shown in the UI as **Corner pin** - is different and is the mode that matters for projection mapping. A four-point polygon gets a homography from `canvas_to_uv_matrix` (`pm/render/homography.py`), uploaded as the `u_uv_matrix` uniform and divided **per fragment** in `FRAGMENT_SHADER_TEXTURE`. Interpolating UVs per vertex instead would bend the image along the triangulation diagonal, which is the classic broken-mapping artifact. Per-vertex UVs are still uploaded as a fallback for degenerate quads.
+
+   The editor mirrors this with `QTransform.quadToQuad` in `canvas_editor._paint_media`, so the canvas preview and the projected output agree. Corner-to-UV pairing is by proximity to the bounding box (`corner_uv_assignment`), not vertex index, so the media stays put while a corner is dragged.
 
 4. **Multi-screen**: Projection can target specific displays via `QGuiApplication.screens()`; canvas resolution auto-adjusts to selected screen
 
@@ -96,7 +105,24 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 - **Images:** PNG, JPG, JPEG, BMP
 - **Videos:** MP4, MOV, AVI, MKV
 
+## Testing
+
+```bash
+pytest
+```
+
+`tests/conftest.py` forces `QT_QPA_PLATFORM=offscreen`, so the Qt tests need no display.
+
+- `tests/test_homography.py` - corner-pin math, pure numpy
+- `tests/test_corner_pin_ui.py` - fit mode persistence, corner-pin defaults, handle highlighting
+
+Rendering itself is not covered by the suite: `QOpenGLWidget` refuses to create a
+context on the `offscreen` platform. To check the actual output, run under a real
+platform (`xvfb-run -a env QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 ...`) and
+compare `GLRenderer.grabFramebuffer()` against the editor preview.
+
 ## Notes
 
-- **PyOpenGL** is listed in requirements but unused - renderer uses QPainter, not raw OpenGL
-- **No tests** - Project currently has no test suite
+- **Canvas Y is inverted in the vertex shader.** Canvas coordinates grow downward to match the editor; NDC grows upward. Removing that inversion mirrors the projection against what the user is editing.
+- Media fit modes serialize as `stretch`/`contain`/`cover`/`warp`. The combo box shows friendlier labels and keeps the serialized value in `userData` - do not switch back to reading `currentText()`, it would break existing `.pmap.json` files.
+- `MediaTransform` (offset/rotation) is stored and edited in the property panel but is not yet applied by the renderer.
