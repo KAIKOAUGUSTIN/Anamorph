@@ -29,13 +29,26 @@ from PySide6.QtWidgets import (
 from pm.media.image_cache import get_qimage
 from pm.model.commands import AddShapeCommand, EditSession
 from pm.model.project import Project
-from pm.model.snapping import find_snap, shape_edges, shape_vertices, snap_to_grid
+from pm.model.snapping import (
+    closest_point_on_segment,
+    find_snap,
+    shape_edges,
+    shape_vertices,
+    snap_to_grid,
+)
 from pm.model.shapes import (
     CircleShape, EdgeVisibility, MeshShape, PolygonShape, Shape,
     circle_from_center, mesh_from_rect, polygon_from_points,
 )
 from pm.render.fit import content_rect
-from pm.render.mesh import mesh_outline, tessellate_mesh
+from pm.render.mesh import (
+    bezier_control_points,
+    bezier_local_control,
+    cubic_point,
+    edge_samples,
+    mesh_outline,
+    tessellate_mesh,
+)
 from pm.render.homography import corner_uv_assignment
 
 
@@ -185,7 +198,7 @@ def _paint_media(painter: QPainter, shape: Shape, path: QPainterPath) -> bool:
         # Painting the bounding box directly - which is what this used to do -
         # stretched every mode, and the canvas quietly disagreed with the
         # output for contain and cover.
-        box = path.boundingRect()
+        box = _fit_box(shape, path)
         offset_x, offset_y, content_w, content_h = content_rect(
             box.width(), box.height(), source.width(), source.height(), mode
         )
@@ -265,6 +278,63 @@ def _triangle_transform(source: QPolygonF, target: QPolygonF) -> Optional[QTrans
         return None
 
     return QTransform(col_x[0], col_y[0], col_x[1], col_y[1], col_x[2], col_y[2])
+
+
+def polygon_path(shape: PolygonShape) -> QPainterPath:
+    """The polygon's outline, curved edges included.
+
+    Qt draws the cubic exactly, so the preview is not a sampled approximation
+    of the shape the renderer tessellates - both are the same curve, and the
+    editor keeps telling the truth about what will be projected.
+    """
+    path = QPainterPath()
+    points = shape.points
+    if not points:
+        return path
+
+    shape.ensure_edges()
+    path.moveTo(*points[0])
+    count = len(points)
+    for idx in range(count):
+        a = points[idx]
+        b = points[(idx + 1) % count]
+        edge = shape.edges[idx] if idx < len(shape.edges) else None
+        if edge is not None and edge.curved:
+            c1, c2 = bezier_control_points(a, b, edge.curve1, edge.curve2)
+            path.cubicTo(c1[0], c1[1], c2[0], c2[1], b[0], b[1])
+        else:
+            path.lineTo(b[0], b[1])
+    path.closeSubpath()
+    return path
+
+
+def _fit_box(shape, path: QPainterPath) -> QRectF:
+    """The box a fit mode measures against.
+
+    The renderer builds its UVs from the *sampled* outline, so a curved
+    polygon has to be measured the same way here. Qt's exact path bounds and
+    a 16-sample walk differ by a fraction of a pixel, and a fraction of a
+    pixel is exactly the sort of drift that makes the editor and the output
+    disagree once someone zooms in on a seam.
+    """
+    if isinstance(shape, PolygonShape) and shape.has_curves:
+        outline = shape.outline()
+        xs = [p[0] for p in outline]
+        ys = [p[1] for p in outline]
+        return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+    return path.boundingRect()
+
+
+def _edge_path(a, b, edge) -> QPainterPath:
+    """One curved edge, truncated to its `percent` along the arc."""
+    path = QPainterPath()
+    walk = edge_samples(a, b, edge.curve1, edge.curve2, 24, edge.percent)
+    c1, c2 = bezier_control_points(a, b, edge.curve1, edge.curve2)
+    walk.append(cubic_point(a, c1, c2, b, max(0.0, min(1.0, edge.percent))))
+    path.moveTo(*walk[0])
+    for point in walk[1:]:
+        path.lineTo(*point)
+    return path
 
 
 def _polygon_path(polygon: QPolygonF) -> QPainterPath:
@@ -401,11 +471,51 @@ class VertexHandle(QGraphicsEllipseItem):
         super().mouseReleaseEvent(event)
 
 
+class CurveHandle(QGraphicsEllipseItem):
+    """One control point of a curved edge.
+
+    Deliberately not a `VertexHandle`: it does not snap. Snapping a curve
+    control to another surface's corner would drag the tangent somewhere the
+    operator never asked for, and there is nothing on the wall it would line
+    up with anyway.
+    """
+
+    def __init__(self, owner, edge_index: int, slot: int, on_moved) -> None:
+        super().__init__(-4, -4, 8, 8)
+        self.owner = owner
+        self.edge_index = edge_index
+        self.slot = slot
+        self.on_moved = on_moved
+        self._block = False
+        self.setBrush(QBrush(QColor(255, 176, 46)))
+        self.setPen(QPen(QColor(168, 108, 12), 1.2))
+        self.setFlags(QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemSendsGeometryChanges)
+        self.setZValue(11)
+        self.setToolTip("Curve control - Alt+double-click the edge to straighten it")
+
+    def set_pos_silent(self, x: float, y: float) -> None:
+        self._block = True
+        super().setPos(x, y)
+        self._block = False
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionChange and not self._block:
+            if self.on_moved:
+                self.on_moved(self.owner, self.edge_index, self.slot, value)
+        return super().itemChange(change, value)
+
+    def mousePressEvent(self, event) -> None:
+        if self.owner:
+            self.owner.setSelected(True)
+        super().mousePressEvent(event)
+
+
 class PolygonItem(QGraphicsPathItem):
     def __init__(self, model: PolygonShape) -> None:
         super().__init__()
         self.model = model
         self.handles: List[VertexHandle] = []
+        self.curve_handles: List[CurveHandle] = []
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
         self.setBrush(QBrush(QColor(*model.fill_color)))
         self.setPen(QPen(QColor(*model.stroke_color), max(model.stroke_width, 1.0)))
@@ -414,15 +524,11 @@ class PolygonItem(QGraphicsPathItem):
     def set_handles_visible(self, visible: bool) -> None:
         for handle in self.handles:
             handle.setVisible(visible)
+        for handle in self.curve_handles:
+            handle.setVisible(visible)
 
     def update_path(self) -> None:
-        path = QPainterPath()
-        if self.model.points:
-            path.moveTo(*self.model.points[0])
-            for p in self.model.points[1:]:
-                path.lineTo(*p)
-            path.closeSubpath()
-        self.setPath(path)
+        self.setPath(polygon_path(self.model))
 
     def sync_style(self) -> None:
         self.setBrush(QBrush(QColor(*self.model.fill_color)))
@@ -444,6 +550,9 @@ class PolygonItem(QGraphicsPathItem):
                         continue
                     p1 = points[idx]
                     p2 = points[(idx + 1) % len(points)]
+                    if edge.curved:
+                        painter.drawPath(_edge_path(p1, p2, edge))
+                        continue
                     if edge.percent < 1.0:
                         dx = (p2[0] - p1[0]) * edge.percent
                         dy = (p2[1] - p1[1]) * edge.percent
@@ -451,10 +560,35 @@ class PolygonItem(QGraphicsPathItem):
                     painter.drawLine(p1[0], p1[1], p2[0], p2[1])
 
         if option.state & QStyle.State_Selected:
+            self._paint_curve_leashes(painter)
             pen = QPen(QColor(0, 212, 170, 220), 2.0, Qt.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(self.path())
+
+    def _paint_curve_leashes(self, painter) -> None:
+        """Tie each control point back to the vertex it belongs to.
+
+        Without the leash a curve handle floating in space reads as a stray
+        vertex, and the operator has no way to tell which end of the edge it
+        is bending.
+        """
+        points = self.model.points
+        if not points:
+            return
+        self.model.ensure_edges()
+        painter.setPen(QPen(QColor(255, 176, 46, 120), 1.0, Qt.DotLine))
+        painter.setBrush(Qt.NoBrush)
+        count = len(points)
+        for idx, edge in enumerate(self.model.edges[:count]):
+            if not edge.curved:
+                continue
+            a = points[idx]
+            b = points[(idx + 1) % count]
+            c1, c2 = bezier_control_points(a, b, edge.curve1, edge.curve2)
+            painter.drawLine(a[0], a[1], c1[0], c1[1])
+            painter.drawLine(b[0], b[1], c2[0], c2[1])
+
 
 class MeshItem(QGraphicsPathItem):
     """A bendable surface, drawn from its smoothed patch."""
@@ -666,8 +800,11 @@ class CanvasEditor(QGraphicsView):
             if isinstance(shape, MeshShape):
                 vertices.extend(shape_vertices(shape.points))
             elif isinstance(shape, PolygonShape):
+                # Vertices stay the corners - sampling a curve would carpet
+                # the canvas in magnets. Edges follow the curve, because
+                # sliding a corner along a curved edge is the whole point.
                 vertices.extend(shape_vertices(shape.points))
-                edges.extend(shape_edges(shape.points))
+                edges.extend(shape_edges(shape.outline()))
             elif isinstance(shape, CircleShape):
                 # The four anchors are the useful alignment points; the curve
                 # itself has no segments to snap an edge against.
@@ -824,6 +961,11 @@ class CanvasEditor(QGraphicsView):
         raise ValueError("Shape desconhecido")
 
     def _update_item(self, item, shape: Shape) -> None:
+        # Undo replaces the shape *object* (commands restore from a snapshot,
+        # they do not mutate in place), so an item that keeps its original
+        # reference goes on painting the state that was just undone. Re-point
+        # it here, where every project change already passes through.
+        item.model = shape
         if isinstance(item, MeshItem):
             item.update_path()
             item.setVisible(shape.visible)
@@ -845,6 +987,8 @@ class CanvasEditor(QGraphicsView):
             handle.setParentItem(None)
             self.scene.removeItem(handle)
         item.handles = []
+        if isinstance(item, PolygonItem):
+            self._clear_curve_handles(item)
 
     def _create_mesh_handles(self, item: MeshItem) -> None:
         self._clear_handles(item)
@@ -901,6 +1045,113 @@ class CanvasEditor(QGraphicsView):
         visible = item.isSelected()
         for handle in item.handles:
             handle.setVisible(visible)
+        self._update_curve_handles(item)
+
+    # --- curved edges ----------------------------------------------------
+
+    def _clear_curve_handles(self, item: PolygonItem) -> None:
+        for handle in getattr(item, "curve_handles", []):
+            handle.setParentItem(None)
+            self.scene.removeItem(handle)
+        item.curve_handles = []
+
+    def _update_curve_handles(self, item: PolygonItem) -> None:
+        """Two controls per *curved* edge, and none for the rest.
+
+        A quad with a handle on every edge whether it bends or not is eight
+        extra grips to miss the vertex on. They appear when the edge is
+        curved, which is the only time they mean anything.
+        """
+        shape = item.model
+        shape.ensure_edges()
+        points = shape.points
+        wanted = [idx for idx, edge in enumerate(shape.edges[:len(points)]) if edge.curved]
+
+        if [h.edge_index for h in item.curve_handles] != [i for i in wanted for _ in (0, 1)]:
+            self._clear_curve_handles(item)
+            for idx in wanted:
+                for slot in (0, 1):
+                    handle = CurveHandle(item, idx, slot, self._on_curve_handle_moved)
+                    handle.setParentItem(item)
+                    item.curve_handles.append(handle)
+
+        visible = item.isSelected() and not shape.locked
+        count = len(points)
+        for handle in item.curve_handles:
+            edge = shape.edges[handle.edge_index]
+            a = points[handle.edge_index]
+            b = points[(handle.edge_index + 1) % count]
+            control = bezier_control_points(a, b, edge.curve1, edge.curve2)[handle.slot]
+            handle.set_pos_silent(control[0], control[1])
+            handle.setVisible(visible)
+
+    def _on_curve_handle_moved(self, owner: PolygonItem, edge_index: int, slot: int, pos: QPointF) -> None:
+        shape = owner.model
+        shape.ensure_edges()
+        if shape.locked or edge_index >= len(shape.edges):
+            return
+        points = shape.points
+        a = points[edge_index]
+        b = points[(edge_index + 1) % len(points)]
+        scene_pos = owner.mapToScene(pos)
+        local = bezier_local_control(a, b, (scene_pos.x(), scene_pos.y()))
+        if slot == 0:
+            shape.edges[edge_index].curve1 = local
+        else:
+            shape.edges[edge_index].curve2 = local
+        owner.update_path()
+        self.project.touch()
+
+    def _edge_at(self, shape: PolygonShape, point: QPointF, threshold: float = 12.0) -> Optional[int]:
+        """Which edge a click landed on, curve included."""
+        points = shape.points
+        if len(points) < 2:
+            return None
+        shape.ensure_edges()
+        limit = (threshold / max(self._zoom, 0.01)) ** 2
+        target = (point.x(), point.y())
+        best, best_dist = None, limit
+        count = len(points)
+        for idx in range(count):
+            a = points[idx]
+            b = points[(idx + 1) % count]
+            edge = shape.edges[idx] if idx < len(shape.edges) else None
+            if edge is not None and edge.curved:
+                walk = edge_samples(a, b, edge.curve1, edge.curve2, 24) + [b]
+            else:
+                walk = [a, b]
+            for i in range(len(walk) - 1):
+                closest = closest_point_on_segment(target, walk[i], walk[i + 1])
+                dist = (closest[0] - target[0]) ** 2 + (closest[1] - target[1]) ** 2
+                if dist < best_dist:
+                    best, best_dist = idx, dist
+        return best
+
+    def toggle_edge_curve(self, item: PolygonItem, edge_index: int) -> bool:
+        """Bow a straight edge, or straighten a curved one."""
+        shape = item.model
+        if shape.locked:
+            return False
+        shape.ensure_edges()
+        if edge_index is None or edge_index >= len(shape.edges):
+            return False
+
+        edge = shape.edges[edge_index]
+        if self._session is not None:
+            self._session.begin(shape)
+        if edge.curved:
+            edge.straighten()
+            label = "Straighten Edge"
+        else:
+            shape.bow_edge(edge_index)
+            label = "Curve Edge"
+        item.update_path()
+        self._update_curve_handles(item)
+        if self._session is not None:
+            self._session.commit(self.project, label)
+        else:
+            self.project.touch()
+        return True
 
     def _apply_corner_roles(self, item: PolygonItem) -> None:
         """Highlight which vertex holds the media's top-left corner.
@@ -1148,6 +1399,12 @@ class CanvasEditor(QGraphicsView):
             scene_pos = self._snap_point(self.mapToScene(event.position().toPoint()))
             item = self._polygon_item_at(event.position().toPoint())
             if item:
+                if event.modifiers() & Qt.AltModifier:
+                    # Alt because a plain double-click already inserts a
+                    # vertex, and inserting one is the more common act.
+                    edge_index = self._edge_at(item.model, scene_pos)
+                    if edge_index is not None and self.toggle_edge_curve(item, edge_index):
+                        return
                 if self._session is not None:
                     self._session.begin(item.model)
                 if self._insert_vertex(item, scene_pos):

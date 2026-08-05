@@ -30,7 +30,7 @@ python projection_gui.py
 
 - `pm/model/` - Data models (dataclasses, no Qt dependency)
   - `project.py` - Project root with CanvasSettings, shape list, media library; emits `changed` signal via QObject inheritance
-  - `shapes.py` - PolygonShape, CircleShape and MeshShape dataclasses with serialization via `shape_to_dict`/`shape_from_dict`
+  - `shapes.py` - PolygonShape (with per-edge visibility and bezier controls), CircleShape and MeshShape dataclasses, serialized via `shape_to_dict`/`shape_from_dict`
   - `media.py` - MediaRef (image/video) with fit modes, UV transform, and `SourceRect` (which region of the media feeds the surface)
   - `effects.py` - Effects (pulse, strobe, RGB shift) with parameters
   - `commands.py` - Undoable edits as `QUndoCommand`s, plus `EditSession` for turning a drag into one step
@@ -55,7 +55,7 @@ python projection_gui.py
   - `homography.py` - Corner-pin math (numpy only, no Qt/GL), shared by the renderer and the editor preview
   - `fit.py` - `content_rect`: where media sits inside a surface's box. The single source of truth for stretch/contain/cover
   - `test_pattern.py` - Calibration images (grid / checkerboard / borders) drawn with QPainter
-  - `mesh.py` - Triangulation using mapbox_earcut, plus `tessellate_mesh`/`mesh_outline`: the Catmull-Rom patch behind `MeshShape`
+  - `mesh.py` - Triangulation using mapbox_earcut, the Catmull-Rom patch behind `MeshShape` (`tessellate_mesh`/`mesh_outline`), and the cubic-edge sampling behind curved polygons (`bezier_control_points`/`polygon_outline`)
 
 - `pm/media/` - Media handling
   - `video_player.py` - OpenCV-based video playback with threading, looping, and RGB conversion
@@ -69,7 +69,7 @@ python projection_gui.py
 1. **Signal-based Updates**: Project.changed signal propagates to UI components; circular updates prevented by `blockSignals` in zoom controls
 
 2. **Shape Types**: Three shape types supported:
-   - `PolygonShape`: Variable points with per-edge visibility control
+   - `PolygonShape`: Variable points, with per-edge visibility, length and curvature
    - `CircleShape`: Elliptical with control points and anchor system
    - `MeshShape`: A control grid of `(rows + 1) x (cols + 1)` points, row-major
 
@@ -111,9 +111,21 @@ python projection_gui.py
 
    Anything that mutates a shape must go through a command, or it will be silently un-undoable. In the property panel that means calling `self._commit("Label")` instead of emitting `shape_changed` directly.
 
-7. **Snapping**: `find_snap` (`pm/model/snapping.py`) prefers a vertex, then an edge, then the grid. The dragged shape is excluded from its own candidates - its adjacent edges are zero pixels away and would pin the vertex in place. The threshold is in screen pixels, divided by the zoom before use, so the magnet feels constant to the hand.
+   **A command replaces the shape object, it does not mutate it.** `_restore` swaps a freshly deserialised shape into the project list, so anything holding the old reference is left with an orphan: it keeps painting the state that was just undone, and edits written to it never reach the project. Every holder must re-point after a change - `CanvasEditor._update_item` reassigns `item.model`, and `PropertyPanel._commit`/`refresh_geometry` re-read `_shape` by id. A new widget that caches a shape has to do the same.
 
-8. **Input space**: `MediaRef.source_rect` (a `SourceRect`) says *which part* of the media feeds a surface, independent of where that surface sits. One clip can drive six surfaces, each taking a different region. It is applied last in the UV chain - after fit, corner pin and `MediaTransform` - in `FRAGMENT_SHADER_TEXTURE`, and mirrored in `canvas_editor._paint_media`. Aspect ratio and pixel offsets are measured against the *region*, not the whole file.
+7. **Curved edges**: Each `EdgeVisibility` carries a cubic's two control points in **edge-local** `(t, n)` units - `t` along the chord from this vertex to the next, `n` perpendicular, both scaled by the chord's length. Move, rotate or scale the polygon and the curvature comes along for free; absolute control points would have to be transformed at every one of those sites, and would be missed at one.
+
+   Straight is the *default value*, not a branch: the controls sit at `1/3` and `2/3` of the chord with no offset, which reproduces the segment exactly. `PolygonShape.curve_pairs()` returns None when nothing is curved, so an all-straight polygon keeps the cheap path through triangulation, stroking and hit testing - and `shape_to_dict` writes no curve keys, leaving old files unchanged.
+
+   `PolygonShape.bow_edge` picks the sign of the first bow from the polygon's winding (`signed_area`), because the edge frame's normal points inward for one winding and outward for the other, and the first click on "Curve" should give an arch rather than a dent.
+
+   The renderer tessellates `shape.outline()`; the editor draws Qt cubics via `polygon_path`, so the preview is the same curve rather than an approximation of it. Corner pin still builds its homography from the four *anchors* (`_warp_matrix` reads `shape.points`, never the outline) and the clip is forced on for curved shapes, so a bulge past a corner reads outside the media instead of smearing its edge texel.
+
+   Edges are curved with Alt+double-click on the canvas or the per-edge Curve box in the panel; the amber `CurveHandle`s appear only for edges that are curved, and deliberately do not snap.
+
+8. **Snapping**: `find_snap` (`pm/model/snapping.py`) prefers a vertex, then an edge, then the grid. The dragged shape is excluded from its own candidates - its adjacent edges are zero pixels away and would pin the vertex in place. The threshold is in screen pixels, divided by the zoom before use, so the magnet feels constant to the hand.
+
+9. **Input space**: `MediaRef.source_rect` (a `SourceRect`) says *which part* of the media feeds a surface, independent of where that surface sits. One clip can drive six surfaces, each taking a different region. It is applied last in the UV chain - after fit, corner pin and `MediaTransform` - in `FRAGMENT_SHADER_TEXTURE`, and mirrored in `canvas_editor._paint_media`. Aspect ratio and pixel offsets are measured against the *region*, not the whole file.
 
    Axis-aligned on purpose: a free quad here would be a second homography stacked on the corner pin, and the real need ("this wall shows the left third") is a rectangle.
 
@@ -121,7 +133,7 @@ python projection_gui.py
 
 Projects saved as JSON with `.pmap.json` extension containing:
 - Canvas dimensions and background color
-- Shapes array with full state (points, colors, media, effects); a mesh also stores `rows`/`cols`
+- Shapes array with full state (points, colors, media, effects); a mesh also stores `rows`/`cols`, and a curved edge stores `curve1`/`curve2`
 - Media library paths
 - `outputs`: one entry per projector (region, keystone corners, blend, colour)
 - UI state (`last_projection_screen_id`, `test_mode`, `test_pattern`)
@@ -160,6 +172,8 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 - `Alt` / `Ctrl` + drag - Rotate / scale the shape (see Gestures above)
 - `Alt` while dragging a vertex - Bypass snapping for that drag
 - `Ctrl+D` - Duplicate the selected shape
+- Double-click an edge - Insert a vertex there
+- `Alt` + double-click an edge - Curve it, or straighten it again
 - `Delete` / `Backspace` - Remove selected shape
 - `Escape` - Close fullscreen projection window
 
@@ -177,7 +191,7 @@ pytest
 
 - `tests/test_homography.py` - corner-pin math, pure numpy
 - `tests/test_snapping.py` - snap priority and the canvas wiring around it
-- `tests/test_undo.py` - command round trips, gesture merging, drag-to-one-step
+- `tests/test_undo.py` - command round trips, gesture merging, drag-to-one-step, and that undo reaches the canvas item and the panel rather than an orphan
 - `tests/test_precision.py` - keyboard nudge and typed coordinates
 - `tests/test_corner_pin_ui.py` - fit mode persistence, corner-pin defaults, handle highlighting
 - `tests/test_test_pattern.py` - calibration pattern rendering and persistence
@@ -190,6 +204,7 @@ pytest
 - `tests/test_project_store.py` - session round trip and legacy workspace migration
 - `tests/test_output_ui.py` - the outputs dialog and one projection window per enabled output
 - `tests/test_mesh.py` - patch interpolation, UVs following the bend, density resampling, mesh handles and gestures
+- `tests/test_bezier_edges.py` - edge-local controls, the straight-by-default invariant, outward bowing, curve handles and hit testing
 
 Rendering itself is not covered by the suite: `QOpenGLWidget` refuses to create a
 context on the `offscreen` platform. To check the actual output, run under a real
