@@ -4,7 +4,16 @@ import math
 from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+    QTransform,
+)
 from PySide6.QtWidgets import QStyle
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
@@ -14,8 +23,10 @@ from PySide6.QtWidgets import (
     QGraphicsView,
 )
 
+from pm.media.image_cache import get_qimage
 from pm.model.project import Project
 from pm.model.shapes import CircleShape, EdgeVisibility, PolygonShape, Shape, circle_from_center, polygon_from_points
+from pm.render.homography import corner_uv_assignment
 
 
 class CanvasScene(QGraphicsScene):
@@ -70,6 +81,57 @@ class CanvasScene(QGraphicsScene):
         painter.drawLine(canvas_rect.right(), canvas_rect.bottom() - corner_size, canvas_rect.right(), canvas_rect.bottom())
 
 
+def _paint_media(painter: QPainter, shape: Shape, path: QPainterPath) -> bool:
+    """Draw a shape's media into the editor, matching what gets projected.
+
+    Corner-pinned quads go through QTransform.quadToQuad, which is the same
+    homography the output shader applies - so what the user drags here is what
+    lands on the wall. Returns False when there is nothing to draw and the
+    caller should fall back to the flat fill colour.
+
+    Video is deliberately not previewed: a second decoder per shape would
+    double the cost of every clip just to feed the editor.
+    """
+    media = getattr(shape, "media", None)
+    if not media or media.kind != "image":
+        return False
+
+    image = get_qimage(media.path)
+    if image is None:
+        return False
+
+    painter.save()
+    painter.setClipPath(path)
+    painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+    transform = None
+    if (media.fit_mode or "").lower() == "warp" and isinstance(shape, PolygonShape):
+        transform = _warp_transform(shape, image)
+
+    if transform is not None:
+        painter.setTransform(transform, True)
+        painter.drawImage(0, 0, image)
+    else:
+        painter.drawImage(path.boundingRect(), image)
+
+    painter.restore()
+    return True
+
+
+def _warp_transform(shape: PolygonShape, image: QImage) -> Optional[QTransform]:
+    """Image-pixel space -> canvas space for a corner-pinned quad."""
+    uvs = corner_uv_assignment(shape.points)
+    if uvs is None:
+        return None
+
+    width, height = image.width(), image.height()
+    source = QPolygonF([QPointF(u * width, v * height) for u, v in uvs])
+    target = QPolygonF([QPointF(x, y) for x, y in shape.points])
+    # Returns None when the quad has collapsed - self-crossing corners, or a
+    # shape dragged flat.
+    return QTransform.quadToQuad(source, target)
+
+
 class VertexHandle(QGraphicsEllipseItem):
     def __init__(self, owner, index: int, on_moved, snap_func, on_pressed=None, on_released=None) -> None:
         super().__init__(-5, -5, 10, 10)
@@ -82,13 +144,21 @@ class VertexHandle(QGraphicsEllipseItem):
         self._block = False
         self._restore_parent_move: Optional[bool] = None
         # Refined handle styling - cyan accent
-        self.setBrush(QBrush(QColor(0, 212, 170)))
-        self.setPen(QPen(QColor(0, 136, 102), 1.5))
+        self.set_accent(False)
         self.setFlags(
             QGraphicsItem.ItemIsMovable
             | QGraphicsItem.ItemSendsGeometryChanges
         )
         self.setZValue(10)
+
+    def set_accent(self, accent: bool) -> None:
+        """Amber marks the corner carrying the media's origin; cyan is neutral."""
+        if accent:
+            self.setBrush(QBrush(QColor(255, 176, 46)))
+            self.setPen(QPen(QColor(168, 108, 12), 1.5))
+        else:
+            self.setBrush(QBrush(QColor(0, 212, 170)))
+            self.setPen(QPen(QColor(0, 136, 102), 1.5))
 
     def set_pos_silent(self, x: float, y: float) -> None:
         self._block = True
@@ -156,8 +226,8 @@ class PolygonItem(QGraphicsPathItem):
 
     def paint(self, painter, option, widget=None) -> None:
         painter.setRenderHint(QPainter.Antialiasing, True)
-        fill = QBrush(QColor(*self.model.fill_color))
-        painter.fillPath(self.path(), fill)
+        if not _paint_media(painter, self.model, self.path()):
+            painter.fillPath(self.path(), QBrush(QColor(*self.model.fill_color)))
 
         if self.model.stroke_width > 0:
             pen = QPen(QColor(*self.model.stroke_color), max(self.model.stroke_width, 0.5))
@@ -208,14 +278,14 @@ class CircleItem(QGraphicsEllipseItem):
         self.handles: List[VertexHandle] = []
         self._drag_value = QPointF(0, 0)
         self.handle_angle = -math.pi / 2.0
-
-    def set_handles_visible(self, visible: bool) -> None:
-        for handle in self.handles:
-            handle.setVisible(visible)
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
         self.setBrush(QBrush(QColor(*model.fill_color)))
         self.setPen(QPen(QColor(*model.stroke_color), max(model.stroke_width, 1.0)))
         self.update_rect()
+
+    def set_handles_visible(self, visible: bool) -> None:
+        for handle in self.handles:
+            handle.setVisible(visible)
 
     def update_rect(self) -> None:
         rx = max(self.model.radius_x, 1.0)
@@ -238,8 +308,13 @@ class CircleItem(QGraphicsEllipseItem):
     def paint(self, painter, option, widget=None) -> None:
         painter.setRenderHint(QPainter.Antialiasing, True)
         rect = self.rect()
-        fill = QBrush(QColor(*self.model.fill_color))
-        painter.setBrush(fill)
+
+        ellipse = QPainterPath()
+        ellipse.addEllipse(rect)
+        if _paint_media(painter, self.model, ellipse):
+            painter.setBrush(Qt.NoBrush)
+        else:
+            painter.setBrush(QBrush(QColor(*self.model.fill_color)))
         if self.model.stroke_width > 0:
             pen = QPen(QColor(*self.model.stroke_color), max(self.model.stroke_width, 0.5))
             painter.setPen(pen)
@@ -449,9 +524,27 @@ class CanvasEditor(QGraphicsView):
             self._create_point_handles(item)
         for handle, point in zip(item.handles, item.model.points):
             handle.set_pos_silent(point[0], point[1])
+        self._apply_corner_roles(item)
         visible = item.isSelected()
         for handle in item.handles:
             handle.setVisible(visible)
+
+    def _apply_corner_roles(self, item: PolygonItem) -> None:
+        """Highlight which vertex holds the media's top-left corner.
+
+        Dragging one corner past another re-pairs them, which rotates the
+        media. Without a marker that happens invisibly and the user is left
+        wondering why the image jumped.
+        """
+        media = item.model.media
+        uvs = None
+        if media and media.kind and (media.fit_mode or "").lower() == "warp":
+            uvs = corner_uv_assignment(item.model.points)
+
+        for idx, handle in enumerate(item.handles):
+            is_origin = uvs is not None and idx < len(uvs) and uvs[idx] == (0.0, 0.0)
+            handle.set_accent(is_origin)
+            handle.setToolTip("Media top-left corner" if is_origin else "")
 
     def _create_circle_point_handles(self, item: CircleItem) -> None:
         self._clear_handles(item)

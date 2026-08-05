@@ -6,32 +6,53 @@ layout(location = 0) in vec2 in_pos;
 layout(location = 1) in vec2 in_uv;
 
 out vec2 v_uv;
+out vec2 v_pos;
 
 uniform mat4 u_mvp;
 uniform vec2 u_resolution;
 uniform vec2 u_canvas_size;
 
 void main() {
-    // Convert from canvas coordinates to normalized device coordinates
+    // Convert from canvas coordinates to normalized device coordinates.
+    // Canvas Y grows downward (top-left origin, matching the editor) while
+    // NDC Y grows upward, so Y is inverted here - without it the projection
+    // comes out mirrored vertically against what the editor shows.
     vec2 normalized = in_pos / u_canvas_size;
-    vec2 ndc = normalized * 2.0 - 1.0;
+    vec2 ndc = vec2(normalized.x * 2.0 - 1.0, 1.0 - normalized.y * 2.0);
     gl_Position = vec4(ndc, 0.0, 1.0);
     v_uv = in_uv;
+    // Canvas-space position, needed by the projective UV path in the fragment
+    // stage. Interpolating it linearly is exact here: the projection is
+    // orthographic and every shape is flat.
+    v_pos = in_pos;
 }
 """
 
 FRAGMENT_SHADER_TEXTURE = """
 #version 330 core
 in vec2 v_uv;
+in vec2 v_pos;
 out vec4 frag_color;
 
 uniform sampler2D u_texture;
 uniform float u_opacity;
 uniform float u_time;
 uniform vec3 u_rgb_shift;  // (amount, speed, 0)
+uniform mat3 u_uv_matrix;      // canvas -> UV homography (corner pin)
+uniform int u_uv_projective;   // 0 = per-vertex v_uv, 1 = u_uv_matrix
 
 void main() {
     vec2 uv = v_uv;
+
+    // Corner pin: dividing by the homogeneous component per fragment is what
+    // makes the media follow the surface in perspective. Interpolating UVs
+    // per vertex instead bends the image along the triangulation diagonal.
+    if (u_uv_projective == 1) {
+        vec3 h = u_uv_matrix * vec3(v_pos, 1.0);
+        if (abs(h.z) > 1e-9) {
+            uv = h.xy / h.z;
+        }
+    }
 
     // RGB shift effect
     if (u_rgb_shift.x > 0.001) {
