@@ -135,12 +135,22 @@ def _paint_media(painter: QPainter, shape: Shape, path: QPainterPath) -> bool:
     painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
 
     mode = (media.fit_mode or "stretch").lower()
+    region = media.source_rect.normalised()
+    # The slice of the file that feeds this surface, in image pixels.
+    source = QRectF(
+        region.u0 * image.width(),
+        region.v0 * image.height(),
+        region.width * image.width(),
+        region.height * image.height(),
+    )
 
     transform = None
     if mode == "warp" and isinstance(shape, PolygonShape):
-        transform = _warp_transform(shape, image)
+        transform = _warp_transform(shape, image, region)
 
     if transform is not None:
+        # The transform maps the region onto the quad, so the rest of the
+        # image lands outside it and the clip path above removes it.
         painter.setTransform(transform, True)
         painter.drawImage(0, 0, image)
     else:
@@ -151,25 +161,30 @@ def _paint_media(painter: QPainter, shape: Shape, path: QPainterPath) -> bool:
         # output for contain and cover.
         box = path.boundingRect()
         offset_x, offset_y, content_w, content_h = content_rect(
-            box.width(), box.height(), image.width(), image.height(), mode
+            box.width(), box.height(), source.width(), source.height(), mode
         )
         painter.drawImage(
             QRectF(box.x() + offset_x, box.y() + offset_y, content_w, content_h),
             image,
+            source,
         )
 
     painter.restore()
     return True
 
 
-def _warp_transform(shape: PolygonShape, image: QImage) -> Optional[QTransform]:
+def _warp_transform(shape: PolygonShape, image: QImage, region) -> Optional[QTransform]:
     """Image-pixel space -> canvas space for a corner-pinned quad."""
     uvs = corner_uv_assignment(shape.points)
     if uvs is None:
         return None
 
     width, height = image.width(), image.height()
-    source = QPolygonF([QPointF(u * width, v * height) for u, v in uvs])
+    # Corner UVs address the chosen region, not the whole file.
+    source = QPolygonF([
+        QPointF((region.u0 + u * region.width) * width, (region.v0 + v * region.height) * height)
+        for u, v in uvs
+    ])
     target = QPolygonF([QPointF(x, y) for x, y in shape.points])
     # Returns None when the quad has collapsed - self-crossing corners, or a
     # shape dragged flat.
