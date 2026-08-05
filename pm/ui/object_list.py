@@ -50,13 +50,28 @@ class ObjectList(QWidget):
     def set_shapes(self, shapes: List[Shape]) -> None:
         self._updating = True
         self.list.clear()
+        # Groups are invisible in the canvas until something moves, so the
+        # layer list is where membership has to be legible. Numbered, because
+        # "grouped" without saying *which* group tells the operator nothing
+        # when a facade has four of them.
+        group_numbers = {}
+        for shape in shapes:
+            group_id = getattr(shape, "group_id", None)
+            if group_id and group_id not in group_numbers:
+                group_numbers[group_id] = len(group_numbers) + 1
+
         for shape in shapes:
             item = QListWidgetItem(shape.name)
             item.setData(Qt.UserRole, shape.id)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if shape.visible else Qt.Unchecked)
+            label = shape.name
+            group_id = getattr(shape, "group_id", None)
+            if group_id:
+                label = f"{label}  ⛓{group_numbers[group_id]}"
             if shape.locked:
-                item.setText(f"{shape.name}  🔒")
+                label = f"{label}  🔒"
+            item.setText(label)
             self.list.addItem(item)
         self._updating = False
 

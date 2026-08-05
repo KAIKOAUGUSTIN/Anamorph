@@ -207,3 +207,50 @@ def test_undo_marks_the_project_changed(project, stack):
     stack.undo()
 
     assert seen, "undo must repaint the canvas and the projection output"
+
+
+# --- undo has to reach the widgets, not just the model --------------------
+#
+# Commands restore a shape from a snapshot, which puts a *new* object in the
+# project list. Anything holding the old reference - a canvas item, the
+# property panel - keeps showing, and writing to, the state that was undone.
+
+def test_undo_moves_what_the_canvas_is_actually_drawing(project, stack):
+    from PySide6.QtCore import QPointF, Qt
+    from pm.ui.canvas_editor import CanvasEditor
+
+    shape = polygon_from_points(list(QUAD))
+    project.add_shape(shape)
+    canvas = CanvasEditor(project)
+    canvas.set_undo_stack(stack)
+    item = canvas.items_by_id[shape.id]
+
+    canvas.select_shape(shape.id)
+    canvas._begin_edit_for(item)
+    canvas._begin_body_drag(item, QPointF(150.0, 150.0), Qt.NoModifier)
+    canvas._update_body_drag(QPointF(200.0, 150.0), Qt.NoModifier)
+    canvas._end_body_drag()
+    canvas._commit_edit("Move Shape")
+
+    stack.undo()
+
+    assert item.model is project.shapes[0], "the item must follow the restored shape"
+    element = item.path().elementAt(0)
+    assert (element.x, element.y) == QUAD[0], "the drawn path still showed the undone move"
+
+
+def test_two_panel_edits_in_a_row_both_land(qapp, project, stack):
+    """The second edit used to be written to an orphaned shape."""
+    from pm.ui.property_panel import PropertyPanel
+
+    shape = polygon_from_points(list(QUAD))
+    project.add_shape(shape)
+    panel = PropertyPanel()
+    panel.set_undo_context(project, stack)
+    panel.set_shape(shape)
+
+    panel.stroke_width.setValue(6.0)
+    panel.lock_check.setChecked(True)
+
+    assert project.shapes[0].stroke_width == 6.0
+    assert project.shapes[0].locked is True
