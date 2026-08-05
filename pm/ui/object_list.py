@@ -3,7 +3,15 @@ from __future__ import annotations
 from typing import List, Optional
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QListWidget, QListWidgetItem, QVBoxLayout, QWidget, QLabel, QCheckBox
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from pm.model.shapes import Shape
 
@@ -11,6 +19,7 @@ from pm.model.shapes import Shape
 class ObjectList(QWidget):
     shape_selected = Signal(str)
     visibility_changed = Signal(str, bool)
+    solo_requested = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -31,6 +40,13 @@ class ObjectList(QWidget):
         self.list.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self.list)
 
+        # Solo is how you work out which quad on screen is which surface in
+        # the list - hide everything else and look at the wall.
+        self.solo_button = QPushButton("Solo")
+        self.solo_button.setToolTip("Show only the selected surface; press again to show all")
+        self.solo_button.clicked.connect(self._on_solo_clicked)
+        layout.addWidget(self.solo_button)
+
     def set_shapes(self, shapes: List[Shape]) -> None:
         self._updating = True
         self.list.clear()
@@ -39,8 +55,18 @@ class ObjectList(QWidget):
             item.setData(Qt.UserRole, shape.id)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if shape.visible else Qt.Unchecked)
+            if shape.locked:
+                item.setText(f"{shape.name}  🔒")
             self.list.addItem(item)
         self._updating = False
+
+    def _on_solo_clicked(self) -> None:
+        items = self.list.selectedItems()
+        if not items:
+            return
+        shape_id = items[0].data(Qt.UserRole)
+        if shape_id:
+            self.solo_requested.emit(shape_id)
 
     def select_shape(self, shape_id: Optional[str]) -> None:
         self._updating = True

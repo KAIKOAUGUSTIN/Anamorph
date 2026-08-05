@@ -12,7 +12,7 @@ import numpy as np
 from OpenGL.GL import (
     GL_ARRAY_BUFFER, GL_BLEND, GL_CLAMP_TO_EDGE, GL_COLOR_BUFFER_BIT,
     GL_COMPILE_STATUS, GL_DYNAMIC_DRAW, GL_ELEMENT_ARRAY_BUFFER, GL_FALSE,
-    GL_FLOAT, GL_FRAGMENT_SHADER, GL_LINEAR, GL_LINES, GL_LINK_STATUS,
+    GL_FLOAT, GL_FRAGMENT_SHADER, GL_LINEAR, GL_LINK_STATUS,
     GL_RGBA, GL_SRC_ALPHA,
     GL_TEXTURE0, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_FILTER,
     GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TRIANGLES, GL_TRUE,
@@ -40,6 +40,7 @@ from pm.media.video_player import VideoPlayer
 from pm.model.media import MediaRef
 from pm.model.project import Project
 from pm.model.shapes import CircleShape, PolygonShape, Shape
+from pm.render.fit import content_rect, leaves_unit_square
 from pm.render.homography import canvas_to_uv_matrix, corner_uv_assignment
 from pm.render.mesh import triangulate_circle, triangulate_polygon
 from pm.render.test_pattern import GRID, render_test_pattern
@@ -237,11 +238,19 @@ class GLRenderer(QOpenGLWidget):
         # Get media texture or render solid
         tex_id, tex_size = self._get_or_create_texture(shape.media)
         if tex_id:
-            uvs = self._compute_uvs_from_size(points, tex_size, shape.media)
+            # Aspect ratio and pixel offsets are relative to the region that
+            # actually feeds this surface, not to the whole file - taking the
+            # left third of a 16:9 clip gives a 16:27 image to fit.
+            region = shape.media.source_rect.normalised()
+            fit_size = (
+                max(tex_size[0] * region.width, 1.0),
+                max(tex_size[1] * region.height, 1.0),
+            )
+            uvs = self._compute_uvs_from_size(points, fit_size, shape.media)
             uv_matrix = self._warp_matrix(shape, points)
             self._draw_textured_shape(
                 points, uvs, indices, tex_id, opacity, shape, now,
-                canvas_w, canvas_h, uv_matrix, tex_size,
+                canvas_w, canvas_h, uv_matrix, fit_size,
             )
         else:
             # Solid color fill
@@ -298,6 +307,8 @@ class GLRenderer(QOpenGLWidget):
         glUniform1i(glGetUniformLocation(self._program_texture, "u_uv_projective"), 0)
         glUniform2f(glGetUniformLocation(self._program_texture, "u_media_offset"), 0.0, 0.0)
         glUniform1f(glGetUniformLocation(self._program_texture, "u_media_rotation"), 0.0)
+        glUniform1i(glGetUniformLocation(self._program_texture, "u_uv_clip"), 0)
+        glUniform4f(glGetUniformLocation(self._program_texture, "u_source_rect"), 0.0, 0.0, 1.0, 1.0)
 
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, tex_id)
@@ -387,6 +398,18 @@ class GLRenderer(QOpenGLWidget):
         loc = glGetUniformLocation(self._program_texture, "u_media_rotation")
         glUniform1f(loc, math.radians(transform.rotation))
 
+        # Clip whenever the UVs can leave the media: the bars of a `contain`
+        # fit, or the gap a pan opens up.
+        panned = transform.offset_x != 0.0 or transform.offset_y != 0.0
+        clip = leaves_unit_square(shape.media.fit_mode) or panned or transform.rotation != 0.0
+        glUniform1i(glGetUniformLocation(self._program_texture, "u_uv_clip"), 1 if clip else 0)
+
+        region = shape.media.source_rect.normalised()
+        glUniform4f(
+            glGetUniformLocation(self._program_texture, "u_source_rect"),
+            region.u0, region.v0, region.width, region.height,
+        )
+
         # Bind texture
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, texture_id)
@@ -464,6 +487,7 @@ class GLRenderer(QOpenGLWidget):
     def _render_polygon_stroke(self, shape: PolygonShape, alpha: float, canvas_w: float, canvas_h: float) -> None:
         shape.ensure_edges()
         points = shape.points
+        segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
         for idx, edge in enumerate(shape.edges):
             if not edge.visible:
                 continue
@@ -473,36 +497,76 @@ class GLRenderer(QOpenGLWidget):
                 dx = (p2[0] - p1[0]) * edge.percent
                 dy = (p2[1] - p1[1]) * edge.percent
                 p2 = (p1[0] + dx, p1[1] + dy)
-            self._draw_line(p1, p2, shape.stroke_color[:3], alpha, shape.stroke_width, canvas_w, canvas_h)
+            segments.append((p1, p2))
+        self._draw_segments(segments, shape.stroke_color[:3], alpha, shape.stroke_width, canvas_w, canvas_h)
 
     def _render_circle_stroke(self, shape: CircleShape, alpha: float, canvas_w: float, canvas_h: float) -> None:
         cx, cy = shape.center
         rx = max(shape.radius_x, 1.0)
         ry = max(shape.radius_y, 1.0)
-        segments = 48
-        for i in range(segments):
-            a1 = i * 2 * math.pi / segments
-            a2 = (i + 1) * 2 * math.pi / segments
-            p1 = (cx + rx * math.cos(a1), cy + ry * math.sin(a1))
-            p2 = (cx + rx * math.cos(a2), cy + ry * math.sin(a2))
-            self._draw_line(p1, p2, shape.stroke_color[:3], alpha, shape.stroke_width, canvas_w, canvas_h)
+        steps = 48
+        segments = []
+        for i in range(steps):
+            a1 = i * 2 * math.pi / steps
+            a2 = (i + 1) * 2 * math.pi / steps
+            segments.append((
+                (cx + rx * math.cos(a1), cy + ry * math.sin(a1)),
+                (cx + rx * math.cos(a2), cy + ry * math.sin(a2)),
+            ))
+        self._draw_segments(segments, shape.stroke_color[:3], alpha, shape.stroke_width, canvas_w, canvas_h)
 
-    def _draw_line(
+    def _draw_segments(
         self,
-        p1: Tuple[float, float],
-        p2: Tuple[float, float],
+        segments: List[Tuple[Tuple[float, float], Tuple[float, float]]],
         color: List[int],
         alpha: float,
         width: float,
         canvas_w: float,
         canvas_h: float,
     ) -> None:
-        """Draw a line segment."""
-        glUseProgram(self._program_stroke)
+        """Draw stroke segments as quads, in one call.
 
-        # Simple 2-vertex line
-        vertices = [p1[0], p1[1], 0.0, 0.0, p2[0], p2[1], 0.0, 0.0]
-        indices = [0, 1]
+        Not GL_LINES: the line width was accepted as an argument and silently
+        ignored, so every stroke came out one pixel wide however thick the
+        editor drew it. glLineWidth would not have helped either - the core
+        profile is free to clamp it to 1.0, and most drivers do.
+
+        Expanding each segment along its perpendicular gives real width, and
+        batching the whole outline into a single draw also retires the 48
+        draw calls a circle used to cost.
+
+        Joins are butt caps. At stroke widths that read as an outline the
+        notch at a corner is invisible; mitring them would need adjacency
+        information this does not carry.
+        """
+        if not segments or width <= 0.0 or alpha <= 0.0:
+            return
+
+        half = max(width, 0.5) / 2.0
+        vertices: List[float] = []
+        indices: List[int] = []
+        for (x1, y1), (x2, y2) in segments:
+            dx, dy = x2 - x1, y2 - y1
+            length = math.hypot(dx, dy)
+            if length < 1e-9:
+                continue
+            # Perpendicular, scaled to half the stroke width.
+            nx, ny = -dy / length * half, dx / length * half
+
+            base = len(vertices) // 4
+            for px, py in (
+                (x1 + nx, y1 + ny),
+                (x2 + nx, y2 + ny),
+                (x2 - nx, y2 - ny),
+                (x1 - nx, y1 - ny),
+            ):
+                vertices.extend([px, py, 0.0, 0.0])
+            indices.extend([base, base + 1, base + 2, base, base + 2, base + 3])
+
+        if not indices:
+            return
+
+        glUseProgram(self._program_stroke)
 
         glBindBuffer(GL_ARRAY_BUFFER, self._vbo)
         glBufferData(GL_ARRAY_BUFFER, len(vertices) * 4, np.array(vertices, dtype=np.float32), GL_DYNAMIC_DRAW)
@@ -517,7 +581,7 @@ class GLRenderer(QOpenGLWidget):
         glUniform4f(loc, color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, alpha)
 
         glBindVertexArray(self._vao)
-        glDrawElements(GL_LINES, 2, GL_UNSIGNED_INT, None)
+        glDrawElements(GL_TRIANGLES, len(indices), GL_UNSIGNED_INT, None)
 
     def _shape_geometry(self, shape: Shape) -> Tuple[List[Tuple[float, float]], List[int]]:
         """Get triangulated geometry for a shape."""
@@ -556,31 +620,24 @@ class GLRenderer(QOpenGLWidget):
         box_w = max(maxx - minx, 1e-5)
         box_h = max(maxy - miny, 1e-5)
 
-        media_w = max(media_w, 1)
-        media_h = max(media_h, 1)
         mode = (media.fit_mode or "stretch").lower()
-
         if mode == "warp":
             return self._compute_warp_uvs(points, minx, miny, box_w, box_h)
 
-        if mode == "stretch":
-            content_w, content_h = box_w, box_h
-            offset_x, offset_y = 0.0, 0.0
-        else:
-            if mode == "contain":
-                scale = min(box_w / media_w, box_h / media_h)
-            else:  # cover
-                scale = max(box_w / media_w, box_h / media_h)
-            content_w = media_w * scale
-            content_h = media_h * scale
-            offset_x = (box_w - content_w) / 2.0
-            offset_y = (box_h - content_h) / 2.0
+        offset_x, offset_y, content_w, content_h = content_rect(
+            box_w, box_h, media_w, media_h, mode
+        )
 
+        # Deliberately unclamped. In `contain` the bars really are outside the
+        # media, and clamping here would stretch the edge column of pixels
+        # across them instead of leaving them empty; the fragment shader
+        # discards those samples rather than hiding them.
         uvs: List[Tuple[float, float]] = []
         for x, y in points:
-            u = (x - minx - offset_x) / content_w if content_w > 0 else 0.0
-            v = (y - miny - offset_y) / content_h if content_h > 0 else 0.0
-            uvs.append((max(0.0, min(1.0, u)), max(0.0, min(1.0, v))))
+            uvs.append((
+                (x - minx - offset_x) / content_w,
+                (y - miny - offset_y) / content_h,
+            ))
 
         return uvs
     def _compute_warp_uvs(

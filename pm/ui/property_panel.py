@@ -23,9 +23,10 @@ from PySide6.QtWidgets import (
 )
 
 from pm.model.commands import EditSession
-from pm.model.media import MediaRef
+from pm.model.media import MediaRef, SourceRect
 from pm.model.project import Project
 from pm.model.shapes import CircleShape, EdgeVisibility, PolygonShape, Shape
+from pm.ui.source_region import SourceRegionPicker
 from pm.ui.widgets import ArrowSlider, ArrowSpinBox
 
 
@@ -151,6 +152,14 @@ class PropertyPanel(QWidget):
         opacity_layout.addWidget(self.opacity_value)
         layout.addWidget(opacity_row)
 
+        # The model has honoured `locked` in the canvas all along; there was
+        # simply no way to switch it on.
+        self.lock_check = QCheckBox("Lock shape")
+        self.lock_check.setStyleSheet(PropertyPanel._CHECKBOX_DIM_STYLE)
+        self.lock_check.setToolTip("Stop this surface being moved or reshaped once it is calibrated.")
+        self.lock_check.toggled.connect(self._on_lock_toggled)
+        layout.addWidget(self.lock_check)
+
         # Edges section (for polygons)
         self.edges_group = QGroupBox("Edges")
         self.edges_layout = QVBoxLayout(self.edges_group)
@@ -163,12 +172,6 @@ class PropertyPanel(QWidget):
         points_layout = QVBoxLayout(self.points_group)
         points_layout.setContentsMargins(8, 8, 8, 8)
         points_layout.setSpacing(6)
-
-        self.circle_points_spin = ArrowSpinBox()
-        self.circle_points_spin.setRange(4, 32)
-        self.circle_points_spin.setSingleStep(2.0)
-        self.circle_points_spin.valueChanged.connect(self._on_circle_points_changed)
-        points_layout.addWidget(self._wrap_row("Circle Points", self.circle_points_spin))
 
         polygon_buttons = QHBoxLayout()
         self.add_vertex_btn = QPushButton("+ Vertex")
@@ -246,6 +249,44 @@ class PropertyPanel(QWidget):
         )
         self.reset_corners_btn.clicked.connect(self._on_reset_corners)
         media_layout.addWidget(self.reset_corners_btn)
+
+        media_layout.addWidget(SectionHeader("Source region"))
+        self.source_hint = QLabel(
+            "Which part of the media feeds this surface. Drag the box; corners resize."
+        )
+        self.source_hint.setWordWrap(True)
+        self.source_hint.setStyleSheet("color: #606060; font-size: 11px;")
+        media_layout.addWidget(self.source_hint)
+
+        self.source_picker = SourceRegionPicker()
+        self.source_picker.region_changed.connect(self._on_source_region_preview)
+        self.source_picker.region_committed.connect(self._on_source_region_committed)
+        media_layout.addWidget(self.source_picker)
+
+        source_row = QWidget()
+        source_row.setFixedHeight(28)
+        source_layout = QHBoxLayout(source_row)
+        source_layout.setContentsMargins(0, 0, 0, 0)
+        source_layout.setSpacing(6)
+        self.source_spins = []
+        for label_text in ("U0", "V0", "U1", "V1"):
+            label = QLabel(label_text)
+            label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
+            spin = ArrowSpinBox()
+            spin.setRange(0.0, 1.0)
+            spin.setDecimals(3)
+            spin.setSingleStep(0.01)
+            spin.setFixedWidth(62)
+            spin.setFixedHeight(24)
+            spin.valueChanged.connect(self._on_source_spin_changed)
+            source_layout.addWidget(label)
+            source_layout.addWidget(spin)
+            self.source_spins.append(spin)
+        media_layout.addWidget(source_row)
+
+        self.reset_source_btn = QPushButton("Use Full Frame")
+        self.reset_source_btn.clicked.connect(self._on_reset_source_region)
+        media_layout.addWidget(self.reset_source_btn)
 
         media_layout.addWidget(self._create_transform_section())
         layout.addWidget(self.media_group)
@@ -395,12 +436,14 @@ class PropertyPanel(QWidget):
         self.stroke_width.setValue(shape.stroke_width)
         self.opacity_slider.setValue(int(shape.opacity * 100))
         self.opacity_value.setText(f"{int(shape.opacity * 100)}%")
+        self.lock_check.setChecked(bool(shape.locked))
         self._populate_edges(shape)
         self._update_point_controls(shape)
         self._populate_coords(shape)
         self._update_media(shape.media)
         self._select_fit_mode(shape.media.fit_mode if shape.media else "stretch")
         self._update_corner_pin_controls()
+        self._sync_source_region(shape)
         if shape.media:
             self.offset_x.setValue(shape.media.transform.offset_x)
             self.offset_y.setValue(shape.media.transform.offset_y)
@@ -584,6 +627,71 @@ class PropertyPanel(QWidget):
         self._shape.points = points
         self._commit("Set Vertex")
 
+    # --- source region ---------------------------------------------------
+
+    def _sync_source_region(self, shape: Shape) -> None:
+        media = shape.media
+        region = media.source_rect.normalised()
+        self.source_picker.set_media(media.path if media.kind == "image" else "", region)
+        for spin, value in zip(self.source_spins, (region.u0, region.v0, region.u1, region.v1)):
+            spin.setValue(value)
+        # Only images can be previewed; video would need a second decoder.
+        self.source_picker.setVisible(media.kind == "image")
+        self.source_hint.setVisible(media.kind == "image")
+
+    def _apply_source_region(self, region: SourceRect, commit: bool) -> None:
+        if self._updating or not self._shape:
+            return
+        if not self._shape.media:
+            self._shape.media = MediaRef()
+
+        region = region.normalised()
+        self._shape.media.source_rect = region
+
+        self._updating = True
+        for spin, value in zip(self.source_spins, (region.u0, region.v0, region.u1, region.v1)):
+            spin.setValue(value)
+        self._updating = False
+
+        if commit:
+            self._commit("Source Region")
+        else:
+            # Live feedback while dragging; the undo entry waits for release,
+            # exactly like a drag on the canvas.
+            self.shape_changed.emit()
+
+    def _on_source_region_preview(self, region: SourceRect) -> None:
+        self._apply_source_region(region, commit=False)
+
+    def _on_source_region_committed(self, region: SourceRect) -> None:
+        self._apply_source_region(region, commit=True)
+
+    def _on_source_spin_changed(self, _value: float) -> None:
+        if self._updating or not self._shape:
+            return
+        region = SourceRect(*(spin.value() for spin in self.source_spins))
+        self._apply_source_region(region, commit=True)
+        self.source_picker.set_media(
+            self._shape.media.path if self._shape.media.kind == "image" else "",
+            self._shape.media.source_rect,
+        )
+
+    def _on_reset_source_region(self) -> None:
+        self._apply_source_region(SourceRect(), commit=True)
+        if self._shape:
+            self.source_picker.set_media(
+                self._shape.media.path if self._shape.media.kind == "image" else "",
+                self._shape.media.source_rect,
+            )
+
+    def _on_lock_toggled(self, checked: bool) -> None:
+        if self._updating or not self._shape:
+            return
+        if self._shape.locked == checked:
+            return
+        self._shape.locked = bool(checked)
+        self._commit("Lock" if checked else "Unlock")
+
     def _on_circle_geometry(self, field: str, value: float) -> None:
         if self._updating or not isinstance(self._shape, CircleShape):
             return
@@ -600,14 +708,13 @@ class PropertyPanel(QWidget):
 
     def _update_point_controls(self, shape: Shape) -> None:
         if isinstance(shape, CircleShape):
+            # Circles are edited through the four axis handles and the
+            # RX/RY boxes; there are no vertices to add or remove.
             self.points_group.setVisible(True)
-            self.circle_points_spin.setEnabled(True)
             self.add_vertex_btn.setEnabled(False)
             self.remove_vertex_btn.setEnabled(False)
-            self.circle_points_spin.setValue(int(getattr(shape, "control_points", 4)))
         elif isinstance(shape, PolygonShape):
             self.points_group.setVisible(True)
-            self.circle_points_spin.setEnabled(False)
             self.add_vertex_btn.setEnabled(True)
             self.remove_vertex_btn.setEnabled(True)
         else:
@@ -674,15 +781,6 @@ class PropertyPanel(QWidget):
         self._shape.ensure_edges()
         self._shape.edges[idx].percent = float(value) / 100.0
         self._commit("Edge Length")
-
-    def _on_circle_points_changed(self, value: float) -> None:
-        if self._updating or not isinstance(self._shape, CircleShape):
-            return
-        count = max(4, int(value))
-        if count % 2 != 0:
-            count += 1
-        self._shape.control_points = count
-        self._commit("Circle Points")
 
     def _on_add_vertex(self) -> None:
         if self._updating or not isinstance(self._shape, PolygonShape):

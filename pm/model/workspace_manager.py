@@ -95,6 +95,17 @@ class WorkspaceManager(QObject):
         """Get a workspace by screen ID."""
         return self._workspaces.get(screen_id)
 
+    def set_workspace(self, screen_id: str, project: Project) -> None:
+        """Attach a project to a screen, replacing whatever was there.
+
+        Callers that swap the active project - opening a file, starting a new
+        one - must go through this. Reassigning the window's attribute alone
+        leaves the manager holding the previous project, and save_all_workspaces
+        then writes that one back over the user's work at shutdown.
+        """
+        self._workspaces[screen_id] = project
+        self.workspace_changed.emit(screen_id)
+
     def switch_to_screen(self, screen_id: str, screen_name: str = "") -> Project:
         """Switch to a screen and return its workspace."""
         # Save current workspace before switching
