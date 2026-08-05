@@ -238,11 +238,19 @@ class GLRenderer(QOpenGLWidget):
         # Get media texture or render solid
         tex_id, tex_size = self._get_or_create_texture(shape.media)
         if tex_id:
-            uvs = self._compute_uvs_from_size(points, tex_size, shape.media)
+            # Aspect ratio and pixel offsets are relative to the region that
+            # actually feeds this surface, not to the whole file - taking the
+            # left third of a 16:9 clip gives a 16:27 image to fit.
+            region = shape.media.source_rect.normalised()
+            fit_size = (
+                max(tex_size[0] * region.width, 1.0),
+                max(tex_size[1] * region.height, 1.0),
+            )
+            uvs = self._compute_uvs_from_size(points, fit_size, shape.media)
             uv_matrix = self._warp_matrix(shape, points)
             self._draw_textured_shape(
                 points, uvs, indices, tex_id, opacity, shape, now,
-                canvas_w, canvas_h, uv_matrix, tex_size,
+                canvas_w, canvas_h, uv_matrix, fit_size,
             )
         else:
             # Solid color fill
@@ -300,6 +308,7 @@ class GLRenderer(QOpenGLWidget):
         glUniform2f(glGetUniformLocation(self._program_texture, "u_media_offset"), 0.0, 0.0)
         glUniform1f(glGetUniformLocation(self._program_texture, "u_media_rotation"), 0.0)
         glUniform1i(glGetUniformLocation(self._program_texture, "u_uv_clip"), 0)
+        glUniform4f(glGetUniformLocation(self._program_texture, "u_source_rect"), 0.0, 0.0, 1.0, 1.0)
 
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, tex_id)
@@ -394,6 +403,12 @@ class GLRenderer(QOpenGLWidget):
         panned = transform.offset_x != 0.0 or transform.offset_y != 0.0
         clip = leaves_unit_square(shape.media.fit_mode) or panned or transform.rotation != 0.0
         glUniform1i(glGetUniformLocation(self._program_texture, "u_uv_clip"), 1 if clip else 0)
+
+        region = shape.media.source_rect.normalised()
+        glUniform4f(
+            glGetUniformLocation(self._program_texture, "u_source_rect"),
+            region.u0, region.v0, region.width, region.height,
+        )
 
         # Bind texture
         glActiveTexture(GL_TEXTURE0)

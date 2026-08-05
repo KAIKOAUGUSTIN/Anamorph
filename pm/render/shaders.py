@@ -43,6 +43,7 @@ uniform int u_uv_projective;   // 0 = per-vertex v_uv, 1 = u_uv_matrix
 uniform vec2 u_media_offset;   // shift in UV units
 uniform float u_media_rotation; // radians, about the media centre
 uniform int u_uv_clip;         // 1 = drop samples outside the media
+uniform vec4 u_source_rect;    // (u0, v0, width, height) of the input region
 
 // Slack on the clip test. The corner-pin divide can land a hair outside the
 // unit square right on a quad's edge, and clipping that strictly would cut a
@@ -81,6 +82,12 @@ void main() {
          uv.y < -UV_CLIP_EPS || uv.y > 1.0 + UV_CLIP_EPS)) {
         discard;
     }
+
+    // Input space last: everything above decides where in the *surface* this
+    // fragment falls, and this maps that onto the chosen region of the media.
+    // Clipping happens before the remap, so the test stays against the plain
+    // unit square whatever region is selected.
+    uv = u_source_rect.xy + uv * u_source_rect.zw;
 
     // RGB shift effect
     if (u_rgb_shift.x > 0.001) {
