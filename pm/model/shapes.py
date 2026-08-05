@@ -97,7 +97,6 @@ class CircleShape:
     center: Tuple[float, float]
     radius_x: float
     radius_y: float
-    control_points: int = 4
     anchors: List[Tuple[float, float]] = field(default_factory=list)
     fill_color: List[int] = field(default_factory=default_fill_color)
     stroke_color: List[int] = field(default_factory=default_stroke_color)
@@ -137,7 +136,6 @@ class CircleShape:
             center=(float(center.get("x", 0.0)), float(center.get("y", 0.0))),
             radius_x=float(radius_x),
             radius_y=float(radius_y),
-            control_points=int(data.get("control_points", 4)),
             anchors=[
                 (float(p.get("x", 0.0)), float(p.get("y", 0.0)))
                 for p in data.get("anchors", [])
@@ -205,7 +203,6 @@ def circle_from_center(center: Tuple[float, float], radius: float, name: Optiona
         center=center,
         radius_x=radius,
         radius_y=radius,
-        control_points=4,
         anchors=anchors,
     )
 
@@ -233,7 +230,6 @@ def shape_to_dict(shape: Shape) -> Dict[str, Any]:
         data["radius"] = float(shape.radius)
         data["radius_x"] = float(shape.radius_x)
         data["radius_y"] = float(shape.radius_y)
-        data["control_points"] = int(shape.control_points)
         if shape.anchors:
             data["anchors"] = [{"x": p[0], "y": p[1]} for p in shape.anchors]
     return data

@@ -96,4 +96,8 @@ def test_toolbar_enables_the_pattern_picker_with_test_mode(qapp):
 
     window.action_test_mode.setChecked(False)
     assert not window.pattern_combo.isEnabled()
+
+    # Toggling test mode dirtied the project, and closing a dirty window now
+    # asks before discarding - which would block forever with no one to click.
+    window.project.mark_saved()
     window.close()

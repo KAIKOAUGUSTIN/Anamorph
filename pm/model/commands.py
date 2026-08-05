@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtGui import QUndoCommand
 
 from pm.model.project import Project
-from pm.model.shapes import Shape, shape_from_dict, shape_to_dict
+from pm.model.shapes import Shape, new_shape_id, shape_from_dict, shape_to_dict
 
 SHAPE_EDIT_ID = 1
 
@@ -90,6 +90,27 @@ class AddShapeCommand(QUndoCommand):
 
     def undo(self) -> None:
         self._project.remove_shape(self._shape_id)
+
+
+def duplicate_shape(shape: Shape, offset: float = 20.0) -> Shape:
+    """A copy of `shape`, nudged clear of the original and given a fresh id.
+
+    Mapping a facade means twelve identical windows; drawing each one by hand
+    is not the workflow. The offset is what stops the copy landing exactly on
+    top of its source, where nobody can tell them apart.
+    """
+    state = shape_to_dict(shape)
+    state["id"] = new_shape_id()
+    state["name"] = f"{shape.name} copy"
+
+    if "points" in state:
+        state["points"] = [{"x": p["x"] + offset, "y": p["y"] + offset} for p in state["points"]]
+    if "center" in state:
+        state["center"] = {"x": state["center"]["x"] + offset, "y": state["center"]["y"] + offset}
+    if state.get("anchors"):
+        state["anchors"] = [{"x": p["x"] + offset, "y": p["y"] + offset} for p in state["anchors"]]
+
+    return shape_from_dict(state)
 
 
 class RemoveShapesCommand(QUndoCommand):
