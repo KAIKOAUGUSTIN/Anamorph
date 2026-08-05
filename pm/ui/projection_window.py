@@ -8,10 +8,12 @@ from pm.render.gl_renderer import GLRenderer
 
 
 class ProjectionWindow(QWidget):
-    def __init__(self, project: Project, parent=None) -> None:
+    def __init__(self, project: Project, parent=None, output=None) -> None:
         super().__init__(parent)
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
-        self.renderer = GLRenderer(project, self)
+        # One window per projector, each showing its own view of the shared
+        # canvas through its own calibration.
+        self.renderer = GLRenderer(project, self, output=output)
         project.changed.connect(self.renderer.update)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)

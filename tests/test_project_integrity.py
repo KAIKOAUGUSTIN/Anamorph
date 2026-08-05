@@ -104,32 +104,19 @@ def test_new_project_replaces_when_confirmed(window, monkeypatch):
 
 # --- the workspace the manager actually holds -----------------------------
 
-def _attach_screen(window, screen_id="screen_test"):
-    """Give the window a projection workspace.
-
-    get_available_screens() deliberately excludes the primary display, and a
-    headless runner only has that one - so the screen is established directly
-    rather than depending on the machine having a projector plugged in.
-    """
-    window.workspace_manager.switch_to_screen(screen_id, "Test Screen")
-    return screen_id
-
-
-def test_adopting_a_project_registers_it_with_the_manager(window):
-    """Swapping the attribute alone let save_all_workspaces write the old
-    project back over the user's work at shutdown."""
-    screen_id = _attach_screen(window)
-
+def test_adopting_a_project_hands_it_to_the_store(window):
+    """Swapping the attribute alone let the shutdown save write the previous
+    project back over the user's work."""
     adopted = Project()
     adopted.name = "Opened From Disk"
+
     window._adopt_project(adopted)
 
-    assert window.workspace_manager.get_workspace(screen_id) is adopted
+    assert window.store.project is adopted
+    assert window.project is adopted
 
 
 def test_opening_a_file_survives_a_shutdown_save(window, monkeypatch, tmp_path):
-    screen_id = _attach_screen(window)
-
     on_disk = Project()
     on_disk.name = "From File"
     on_disk.add_shape(polygon_from_points(list(QUAD), name="wall"))
@@ -145,21 +132,25 @@ def test_opening_a_file_survives_a_shutdown_save(window, monkeypatch, tmp_path):
 
     assert window.project.name == "From File"
 
-    # What the shutdown path would persist for this screen.
-    assert window.workspace_manager.get_workspace(screen_id) is window.project
+    # What the shutdown path would persist.
+    assert window.store.project is window.project
 
 
-def test_set_workspace_replaces_the_stored_project(qapp):
-    from pm.model.workspace_manager import WorkspaceManager
+def test_an_opened_project_always_has_somewhere_to_project(window, monkeypatch, tmp_path):
+    """A project with no output cannot show anything at all."""
+    bare = Project()
+    bare.outputs = []
+    path = str(tmp_path / "bare.pmap.json")
+    save_project(bare, path)
 
-    manager = WorkspaceManager()
-    first = manager.get_or_create_workspace("screen-1", "HDMI-1")
-    second = Project()
+    monkeypatch.setattr(
+        "pm.ui.main_window.QFileDialog.getOpenFileName",
+        staticmethod(lambda *a, **k: (path, "")),
+    )
+    _answer_with(monkeypatch, window, QMessageBox.Discard)
+    window._open_project()
 
-    manager.set_workspace("screen-1", second)
-
-    assert manager.get_workspace("screen-1") is second
-    assert manager.get_workspace("screen-1") is not first
+    assert window.project.outputs
 
 
 # --- undoable visibility --------------------------------------------------

@@ -17,10 +17,12 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtGui import QUndoCommand
 
+from pm.model.output import Output
 from pm.model.project import Project
 from pm.model.shapes import Shape, new_shape_id, shape_from_dict, shape_to_dict
 
 SHAPE_EDIT_ID = 1
+OUTPUT_EDIT_ID = 2
 
 # Consecutive edits of the same kind within this window are treated as one
 # gesture. It is what keeps dragging an opacity slider from filling the undo
@@ -178,4 +180,130 @@ class EditSession:
 
     def cancel(self) -> None:
         self._shape_id = None
+        self._before = None
+
+
+class OutputEditCommand(QUndoCommand):
+    """Snapshot swap for one projector's calibration.
+
+    Same shape as ShapeEditCommand, and for the same reason: outputs are
+    mutated in place while a slider moves, so there is no inverse to replay.
+    Calibration is exactly the kind of state you want to be able to back out
+    of - it is tuned by eye, against a wall, under time pressure.
+    """
+
+    def __init__(
+        self,
+        project: Project,
+        output_id: str,
+        before: Dict[str, Any],
+        after: Dict[str, Any],
+        text: str,
+    ) -> None:
+        super().__init__(text)
+        self._project = project
+        self._output_id = output_id
+        self._before = before
+        self._after = after
+        self._touched_at = time.monotonic()
+
+    def id(self) -> int:
+        return OUTPUT_EDIT_ID
+
+    def mergeWith(self, other: QUndoCommand) -> bool:
+        if not isinstance(other, OutputEditCommand):
+            return False
+        if other._output_id != self._output_id or other.text() != self.text():
+            return False
+        if other._touched_at - self._touched_at > MERGE_WINDOW_SECONDS:
+            return False
+        self._after = other._after
+        self._touched_at = other._touched_at
+        return True
+
+    def _restore(self, state: Dict[str, Any]) -> None:
+        for index, output in enumerate(self._project.outputs):
+            if output.id == self._output_id:
+                self._project.outputs[index] = Output.from_dict(state)
+                self._project.touch()
+                return
+
+    def undo(self) -> None:
+        self._restore(self._before)
+
+    def redo(self) -> None:
+        self._restore(self._after)
+
+
+class AddOutputCommand(QUndoCommand):
+    def __init__(self, project: Project, output: Output, text: str = "Add Output") -> None:
+        super().__init__(text)
+        self._project = project
+        self._state = output.to_dict()
+        self._output_id = output.id
+
+    def redo(self) -> None:
+        if self._project.get_output(self._output_id) is None:
+            self._project.add_output(Output.from_dict(self._state))
+
+    def undo(self) -> None:
+        self._project.remove_output(self._output_id)
+
+
+class RemoveOutputCommand(QUndoCommand):
+    def __init__(self, project: Project, output_id: str, text: str = "Remove Output") -> None:
+        super().__init__(text)
+        self._project = project
+        self._index = 0
+        self._state: Optional[Dict[str, Any]] = None
+        for index, output in enumerate(project.outputs):
+            if output.id == output_id:
+                self._index = index
+                self._state = output.to_dict()
+                break
+        self._output_id = output_id
+
+    def redo(self) -> None:
+        self._project.remove_output(self._output_id)
+
+    def undo(self) -> None:
+        if self._state is None:
+            return
+        self._project.outputs.insert(min(self._index, len(self._project.outputs)), Output.from_dict(self._state))
+        self._project.touch()
+
+
+class OutputSession:
+    """Turns a slider drag on a projector's calibration into one undo step."""
+
+    def __init__(self, undo_stack) -> None:
+        self._stack = undo_stack
+        self._output_id: Optional[str] = None
+        self._before: Optional[Dict[str, Any]] = None
+
+    def begin(self, output: Optional[Output]) -> None:
+        if output is None or self._before is not None:
+            return
+        self._output_id = output.id
+        self._before = output.to_dict()
+
+    def commit(self, project: Project, text: str) -> bool:
+        before, output_id = self._before, self._output_id
+        self.cancel()
+        if before is None or output_id is None:
+            return False
+
+        output = project.get_output(output_id)
+        if output is None:
+            return False
+
+        after = output.to_dict()
+        if after == before:
+            return False
+
+        self._stack.push(OutputEditCommand(project, output_id, before, after, text))
+        return True
+
+    def cancel(self) -> None:
+        self._output_id = None
         self._before = None
