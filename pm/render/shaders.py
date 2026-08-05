@@ -140,3 +140,105 @@ void main() {
 # Vertex data structure: x, y, u, v per vertex
 VERTEX_FORMAT = "2f 2f"
 VERTEX_STRIDE = 16  # 4 floats * 4 bytes
+
+
+# --- output stage ---------------------------------------------------------
+#
+# The canvas is composited once into a texture; each projector then draws that
+# texture through its own keystone, colour and edge blend. Doing it in a second
+# pass rather than per shape is what makes soft-edge correct: the ramp has to
+# attenuate the *finished* image, or overlapping surfaces get darkened twice.
+
+VERTEX_SHADER_OUTPUT = """
+#version 330 core
+layout(location = 0) in vec2 in_pos;   // output frame, 0..1
+layout(location = 1) in vec2 in_uv;    // unused; kept for the shared VBO layout
+
+out vec2 v_frame;
+
+void main() {
+    // Y flips for the same reason as the canvas pass: the frame is described
+    // top-left origin, NDC grows upward.
+    gl_Position = vec4(in_pos.x * 2.0 - 1.0, 1.0 - in_pos.y * 2.0, 0.0, 1.0);
+    v_frame = in_pos;
+}
+"""
+
+FRAGMENT_SHADER_OUTPUT = """
+#version 330 core
+in vec2 v_frame;
+out vec4 frag_color;
+
+uniform sampler2D u_canvas;
+uniform vec4 u_region;        // (u0, v0, width, height) of the canvas shown
+uniform mat3 u_keystone;      // output frame -> unwarped frame
+uniform int u_has_keystone;
+
+uniform vec4 u_blend;         // ramp widths: left, right, top, bottom
+uniform float u_blend_gamma;
+
+uniform float u_brightness;
+uniform float u_contrast;
+uniform float u_gamma;
+uniform vec3 u_gain;
+
+// One edge's contribution to the blend ramp. Outside the ramp this is 1.
+//
+// The S-curve matters: two projectors facing each other across an overlap
+// see complementary positions t and 1-t, and this pair sums to exactly 1 for
+// *any* exponent. A plain pow(t, k) does not - at the middle of the overlap
+// two half-lit projectors would add up to more than one projector's worth and
+// leave a bright band down the seam, which is precisely the artefact edge
+// blending exists to remove. The exponent stays tunable because projectors
+// are not linear, so the value that looks seamless is found by eye.
+float edge_ramp(float distance_in, float width, float exponent) {
+    if (width <= 0.0) {
+        return 1.0;
+    }
+    float t = clamp(distance_in / width, 0.0, 1.0);
+    if (t < 0.5) {
+        return 0.5 * pow(2.0 * t, exponent);
+    }
+    return 1.0 - 0.5 * pow(2.0 * (1.0 - t), exponent);
+}
+
+void main() {
+    vec2 frame = v_frame;
+
+    // Keystone: squaring the projector against the surface. Same projective
+    // divide as the per-surface corner pin, for the same reason - a linear
+    // interpolation here would bend the image across the diagonal.
+    if (u_has_keystone == 1) {
+        vec3 h = u_keystone * vec3(frame, 1.0);
+        if (abs(h.z) > 1e-9) {
+            frame = h.xy / h.z;
+        }
+        if (frame.x < 0.0 || frame.x > 1.0 || frame.y < 0.0 || frame.y > 1.0) {
+            // Outside the warped quad is off the surface entirely.
+            frag_color = vec4(0.0, 0.0, 0.0, 1.0);
+            return;
+        }
+    }
+
+    // The canvas pass inverts Y on its way into the framebuffer, so canvas
+    // row 0 lands at texture v = 1. Sampling straight through would hand the
+    // projector a vertically mirrored image - invisible on a symmetric test
+    // pattern, obvious the moment there is text on screen.
+    vec2 canvas_uv = u_region.xy + frame * u_region.zw;
+    vec3 rgb = texture(u_canvas, vec2(canvas_uv.x, 1.0 - canvas_uv.y)).rgb;
+
+    // Colour, before the blend: the ramp is a physical light attenuation and
+    // has to be the last thing applied.
+    rgb = (rgb - 0.5) * u_contrast + 0.5 + u_brightness;
+    rgb = clamp(rgb, 0.0, 1.0) * u_gain;
+    rgb = pow(clamp(rgb, 0.0, 1.0), vec3(1.0 / u_gamma));
+
+    float ramp = edge_ramp(frame.x, u_blend.x, u_blend_gamma)
+               * edge_ramp(1.0 - frame.x, u_blend.y, u_blend_gamma)
+               * edge_ramp(frame.y, u_blend.z, u_blend_gamma)
+               * edge_ramp(1.0 - frame.y, u_blend.w, u_blend_gamma);
+    rgb *= ramp;
+
+    frag_color = vec4(rgb, 1.0);
+}
+"""

@@ -26,9 +26,11 @@ from pm.io.project_io import load_project, save_project
 from pm.model.commands import AddShapeCommand, RemoveShapesCommand, ShapeEditCommand, duplicate_shape
 from pm.model.project import Project
 from pm.model.shapes import Shape, shape_to_dict
-from pm.model.workspace_manager import WorkspaceManager
+from pm.model.output import Output
+from pm.model.project_store import ProjectStore, available_screens, find_screen
 from pm.render.test_pattern import PATTERNS
 from pm.ui.canvas_editor import CanvasEditor
+from pm.ui.output_panel import OutputDialog
 from pm.ui.object_list import ObjectList
 from pm.ui.property_panel import PropertyPanel
 from pm.ui.projection_window import ProjectionWindow
@@ -42,19 +44,18 @@ class MainWindow(QMainWindow):
         # since commands hold references into a specific project's shape list.
         self.undo_stack = QUndoStack(self)
 
-        # Workspace manager for handling multiple screens
-        self.workspace_manager = WorkspaceManager(self)
-        self.workspace_manager.set_base_path(self._get_workspace_base_path())
+        # One project for the whole rig. Projectors are outputs onto its
+        # canvas, not separate workspaces.
+        self.store = ProjectStore(self)
+        self.store.set_base_path(self._get_workspace_base_path())
 
-        # Track projection windows per screen
+        # One projection window per output.
         self._projection_windows: Dict[str, ProjectionWindow] = {}
+        self._output_dialog: Optional[OutputDialog] = None
+        self._projecting = False
 
         # Track known screens to detect new ones
         self._known_screens: set = set()
-
-        self.workspace_manager.workspace_changed.connect(self._on_workspace_changed)
-
-        self.selected_screen_index: Optional[int] = None
         self._connected_project: Optional[Project] = None
 
         self._build_ui()
@@ -175,31 +176,15 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
-        # Screen selector dropdown (NEW)
-        self.screen_combo = QComboBox()
-        self.screen_combo.setFixedWidth(180)
-        self.screen_combo.setStyleSheet("""
-            QComboBox {
-                background: #2a2a2a;
-                color: #00d4aa;
-                border: 1px solid #3a3a3a;
-                padding: 4px 8px;
-                border-radius: 3px;
-            }
-            QComboBox:hover {
-                border-color: #00d4aa;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QComboBox QAbstractItemView {
-                background: #2a2a2a;
-                color: #ffffff;
-                selection-background-color: #00d4aa;
-            }
-        """)
-        toolbar.addWidget(self.screen_combo)
+        self.action_outputs = QAction("Outputs...", self)
+        self.action_outputs.setToolTip(
+            "Calibrate the projectors: canvas region, keystone, edge blend and colour"
+        )
+        toolbar.addAction(self.action_outputs)
+
+        self.outputs_label = QLabel("")
+        self.outputs_label.setStyleSheet("color: #00d4aa; padding: 0 8px;")
+        toolbar.addWidget(self.outputs_label)
 
         toolbar.addSeparator()
 
@@ -348,57 +333,48 @@ class MainWindow(QMainWindow):
         self.property_panel.set_undo_context(self.project, self.undo_stack)
 
         # Screen combo
-        self.screen_combo.currentIndexChanged.connect(self._on_screen_selected)
+        self.action_outputs.triggered.connect(lambda _c=False: self._open_output_dialog())
 
     def _initialize_screens(self) -> None:
-        """Initialize screen detection and workspace setup."""
-        # Store known screens for change detection
-        all_screens = QGuiApplication.screens()
-        for screen in all_screens:
+        """Load the session project and make sure it has somewhere to project."""
+        for screen in QGuiApplication.screens():
             self._known_screens.add(screen.name())
 
-        self._update_screen_combo()
+        project = self.store.load()
+        self._set_project(project)
 
-        # Auto-select first available projection screen
-        screens = self.workspace_manager.get_available_screens()
-        if screens:
-            _, screen_id, screen_name, _ = screens[0]
-            self.workspace_manager.switch_to_screen(screen_id, screen_name)
-            self.project = self.workspace_manager.get_current_workspace()
-            self._set_project(self.project)
-            self.screen_combo.setCurrentIndex(0)
-        else:
-            # No projection screens available
-            self.project = Project()
-            self.project.name = "No Screens"
-            self._set_project(self.project)
+        # A project with no output cannot show anything; give it one aimed at
+        # whatever display is attached.
+        if not project.outputs:
+            project.outputs = [Output(name="Projector 1")]
+        for output in project.outputs:
+            if output.screen_id is None or find_screen(output.screen_id) is None:
+                screens = available_screens()
+                if screens:
+                    output.screen_id = screens[0][1]
 
-    def _update_screen_combo(self) -> None:
-        """Update the screen dropdown with available screens."""
-        self.screen_combo.blockSignals(True)
-        self.screen_combo.clear()
+        self._update_outputs_label()
+        self.canvas.fit_to_canvas()
 
-        screens = self.workspace_manager.get_available_screens()
-        for idx, screen_id, screen_name, geometry in screens:
-            item_text = f"{screen_name} ({geometry.width()}x{geometry.height()})"
-            self.screen_combo.addItem(item_text, (idx, screen_id, screen_name))
+    def _update_outputs_label(self) -> None:
+        outputs = self.project.outputs
+        live = sum(1 for o in outputs if o.enabled)
+        canvas = self.project.canvas
+        self.outputs_label.setText(
+            f"{live}/{len(outputs)} outputs   canvas {canvas.width}x{canvas.height}"
+        )
 
-        if self.screen_combo.count() == 0:
-            self.screen_combo.addItem("No screens available", None)
+    def _open_output_dialog(self) -> None:
+        dialog = OutputDialog(self.project, self.undo_stack, self)
+        dialog.outputs_changed.connect(self._on_outputs_changed)
+        self._output_dialog = dialog
+        dialog.exec()
+        self._output_dialog = None
 
-        self.screen_combo.blockSignals(False)
-
-    def _on_screen_selected(self, index: int) -> None:
-        """Handle screen selection from dropdown."""
-        if index < 0:
-            return
-
-        data = self.screen_combo.itemData(index)
-        if not data:
-            return
-
-        idx, screen_id, screen_name = data
-        self._switch_to_screen(idx, screen_id, screen_name)
+    def _on_outputs_changed(self) -> None:
+        self._update_outputs_label()
+        # Live projection windows follow the calibration as it is tuned.
+        self._sync_projection_windows()
 
     _MSG_BOX_STYLE = """
         QMessageBox {
@@ -433,61 +409,14 @@ class MainWindow(QMainWindow):
         msg.setStyleSheet(self._MSG_BOX_STYLE)
         return msg
 
-    def _update_screen_combo_selection(self, screen_id: str) -> None:
-        for i in range(self.screen_combo.count()):
-            data = self.screen_combo.itemData(i)
-            if data and data[1] == screen_id:
-                self.screen_combo.setCurrentIndex(i)
-                break
-
-    def _find_screen_geometry(self, screen_id: str):
-        screens = self.workspace_manager.get_available_screens()
-        for _, s_id, _, s_geo in screens:
-            if s_id == screen_id:
-                return s_geo
-        return None
-
-    def _switch_to_screen(self, screen_index: int, screen_id: str, screen_name: str) -> None:
-        """Switch to a different screen workspace."""
-        if not self._confirm_discard("Switch screens anyway?"):
-            current_id = self.workspace_manager.get_current_screen_id()
-            if current_id:
-                self.screen_combo.blockSignals(True)
-                self._update_screen_combo_selection(current_id)
-                self.screen_combo.blockSignals(False)
-            return
-
-        geometry = self._find_screen_geometry(screen_id)
-        self.project = self.workspace_manager.switch_to_screen(screen_id, screen_name)
-        self._set_project(self.project)
-
-        if geometry:
-            was_clean = not self._has_unsaved_changes()
-            self.project.canvas.width = geometry.width()
-            self.project.canvas.height = geometry.height()
-            self.project.touch()
-            if was_clean:
-                # Matching the canvas to the target display is bookkeeping,
-                # not an edit worth warning the user about losing.
-                self.project.mark_saved()
-            self.canvas.fit_to_canvas()
-
-        self.selected_screen_index = screen_index
-
     def _has_unsaved_changes(self) -> bool:
         """True only if the project changed since it was last saved or loaded."""
         return bool(getattr(self.project, "dirty", False))
 
-    def _on_workspace_changed(self, screen_id: str) -> None:
-        """Handle workspace change signal."""
-        project = self.workspace_manager.get_workspace(screen_id)
-        if project:
-            self.project = project
-            self._update_project_label()
-
     def _rescan_screens(self) -> None:
-        """Rescan for connected screens."""
-        self._update_screen_combo()
+        """Re-read the attached displays."""
+        self._update_outputs_label()
+        self._sync_projection_windows()
         self.statusBar().showMessage("Screens rescanned", 2000)
 
     def _update_project_label(self) -> None:
@@ -609,11 +538,12 @@ class MainWindow(QMainWindow):
         return True
 
     def _adopt_project(self, project: Project) -> None:
-        """Make `project` the active one, and tell the workspace manager."""
-        screen_id = self.workspace_manager.get_current_screen_id()
-        if screen_id:
-            self.workspace_manager.set_workspace(screen_id, project)
+        """Make `project` the active one, and tell the store."""
+        if not project.outputs:
+            project.outputs = [Output(name="Projector 1")]
+        self.store.set_project(project)
         self._set_project(project)
+        self._update_outputs_label()
 
     def _new_project(self) -> None:
         """Create a new project for the current screen."""
@@ -659,10 +589,9 @@ class MainWindow(QMainWindow):
 
     def _set_project(self, project: Project) -> None:
         # Disconnect from whichever project we actually attached to, not from
-        # self.project: _on_workspace_changed fires during a screen switch and
-        # has already repointed that attribute by the time we get here. Old
-        # workspaces stay alive in the manager, so leaving connections behind
-        # would pile up a new set on every switch.
+        # self.project: a project swap repoints that attribute before we get
+        # here, and the previous one can stay alive elsewhere, so leaving
+        # connections behind would pile up a new set on every swap.
         if self._connected_project is not None and self._connected_project is not project:
             for slot in self._project_slots():
                 self._connected_project.changed.disconnect(slot)
@@ -698,36 +627,70 @@ class MainWindow(QMainWindow):
         self.pattern_combo.blockSignals(False)
 
     def _toggle_projection(self) -> None:
-        """Toggle projection for the current screen."""
-        screen_id = self.workspace_manager.get_current_screen_id()
-        if not screen_id:
-            self.statusBar().showMessage("No screen selected for projection", 3000)
+        """Open every enabled output, or close them all if any are open."""
+        if self._projecting:
+            self._projecting = False
+            self._close_projection_windows()
+            self.statusBar().showMessage("Projection stopped", 2000)
             return
 
-        # Check if projection is already open for this screen
-        if screen_id in self._projection_windows:
-            self._projection_windows[screen_id].close()
-            del self._projection_windows[screen_id]
-            return
+        self._projecting = True
+        opened = self._sync_projection_windows()
+        if opened:
+            self.statusBar().showMessage(f"Projecting to {opened} output(s)", 3000)
+        else:
+            self.statusBar().showMessage(
+                "No enabled output has a screen assigned - see Outputs...", 4000
+            )
 
-        # Find the screen
+    def _close_projection_windows(self) -> None:
+        for window in list(self._projection_windows.values()):
+            window.close()
+        self._projection_windows.clear()
+
+    def _sync_projection_windows(self) -> int:
+        """Match the open windows to the enabled outputs. Returns how many.
+
+        Called whenever the outputs change, so tuning keystone or blend with
+        the projectors live shows up on the wall immediately - which is the
+        only way calibration can actually be done.
+        """
+        if not self._projecting:
+            # Editing outputs while stopped must not start a show. Visibility
+            # used to stand in for this, which was incidental - and made the
+            # behaviour untestable without a mapped window.
+            self._close_projection_windows()
+            return 0
+
+        wanted = {}
+        for output in self.project.outputs:
+            if not output.enabled:
+                continue
+            screen_info = find_screen(output.screen_id)
+            if screen_info is None:
+                continue
+            wanted[output.id] = (output, screen_info)
+
+        for output_id in list(self._projection_windows):
+            if output_id not in wanted:
+                self._projection_windows.pop(output_id).close()
+
         all_screens = QGuiApplication.screens()
-        screens = self.workspace_manager.get_available_screens()
+        for output_id, (output, screen_info) in wanted.items():
+            index = screen_info[0]
+            screen = all_screens[index] if index < len(all_screens) else None
+            window = self._projection_windows.get(output_id)
+            if window is None:
+                window = ProjectionWindow(self.project, output=output)
+                self._projection_windows[output_id] = window
+                window.open_on_screen(screen)
+            else:
+                # The window holds the same Output object the dialog edits,
+                # so calibration changes need no plumbing beyond a repaint.
+                window.renderer.output = output
+                window.renderer.update()
 
-        target_screen = None
-        for idx, s_id, s_name, geometry in screens:
-            if s_id == screen_id:
-                target_screen = all_screens[idx] if idx < len(all_screens) else None
-                break
-
-        if not target_screen:
-            self.statusBar().showMessage("Screen not found", 3000)
-            return
-
-        # Create projection window
-        pw = ProjectionWindow(self.project, self)
-        pw.open_on_screen(target_screen)
-        self._projection_windows[screen_id] = pw
+        return len(self._projection_windows)
 
     def _on_zoom_changed(self, value: int) -> None:
         self.canvas.set_zoom(value / 100.0)
@@ -799,39 +762,25 @@ class MainWindow(QMainWindow):
         # someone found the mouse. The screen is added to the dropdown and
         # announced; switching to it stays the operator's call.
         geometry = screen.geometry()
-        self._update_screen_combo()
+        self._update_outputs_label()
         self.statusBar().showMessage(
             f"Screen connected: {screen_name} ({geometry.width()}x{geometry.height()}) "
-            f"- available in the screen selector",
+            f"- assign it to an output under Outputs...",
             8000,
         )
 
     def _on_screen_removed(self, screen) -> None:
         """Handle screen disconnected."""
-        screen_name = screen.name()
-
-        if screen_name in self._known_screens:
-            self._known_screens.discard(screen_name)
-
-        # Close projection window for this screen if open
-        screens = self.workspace_manager.get_available_screens()
-
-        # Find screen_id for the removed screen
-        for idx, screen_id, s_name, _ in screens:
-            if s_name == screen_name and screen_id in self._projection_windows:
-                self._projection_windows[screen_id].close()
-                del self._projection_windows[screen_id]
-                break
-
-        # Update screen combo
-        self._update_screen_combo()
-
-        # Show notification
-        self.statusBar().showMessage(f"Screen disconnected: {screen_name}", 5000)
+        self._known_screens.discard(screen.name())
+        # Any window aimed at the vanished display closes with it; the output
+        # keeps its screen id so plugging the projector back in restores it.
+        self._sync_projection_windows()
+        self._update_outputs_label()
+        self.statusBar().showMessage(f"Screen disconnected: {screen.name()}", 5000)
 
     def _on_primary_screen_changed(self, screen) -> None:
         """Handle primary screen change."""
-        self._update_screen_combo()
+        self._update_outputs_label()
 
     def closeEvent(self, event) -> None:
         """Handle app close - save all workspaces."""
@@ -839,7 +788,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
 
-        self.workspace_manager.save_all_workspaces()
+        self.store.save()
         # Clean up projection windows
         for pw in self._projection_windows.values():
             pw.close()
