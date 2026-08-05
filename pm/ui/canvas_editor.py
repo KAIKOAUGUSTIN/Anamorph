@@ -29,6 +29,7 @@ from pm.model.commands import AddShapeCommand, EditSession
 from pm.model.project import Project
 from pm.model.snapping import find_snap, shape_edges, shape_vertices, snap_to_grid
 from pm.model.shapes import CircleShape, EdgeVisibility, PolygonShape, Shape, circle_from_center, polygon_from_points
+from pm.render.fit import content_rect
 from pm.render.homography import corner_uv_assignment
 
 
@@ -133,15 +134,29 @@ def _paint_media(painter: QPainter, shape: Shape, path: QPainterPath) -> bool:
     painter.setClipPath(path)
     painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
 
+    mode = (media.fit_mode or "stretch").lower()
+
     transform = None
-    if (media.fit_mode or "").lower() == "warp" and isinstance(shape, PolygonShape):
+    if mode == "warp" and isinstance(shape, PolygonShape):
         transform = _warp_transform(shape, image)
 
     if transform is not None:
         painter.setTransform(transform, True)
         painter.drawImage(0, 0, image)
     else:
-        painter.drawImage(path.boundingRect(), image)
+        # Same `content_rect` the renderer builds its UVs from, so contain
+        # letterboxes and cover crops here exactly as they do on the wall.
+        # Painting the bounding box directly - which is what this used to do -
+        # stretched every mode, and the canvas quietly disagreed with the
+        # output for contain and cover.
+        box = path.boundingRect()
+        offset_x, offset_y, content_w, content_h = content_rect(
+            box.width(), box.height(), image.width(), image.height(), mode
+        )
+        painter.drawImage(
+            QRectF(box.x() + offset_x, box.y() + offset_y, content_w, content_h),
+            image,
+        )
 
     painter.restore()
     return True
@@ -731,13 +746,20 @@ class CanvasEditor(QGraphicsView):
             self._create_circle_point_handles(item)
             return
         cx, cy = item.model.center
-        r = max(item.model.radius_x, item.model.radius_y, 1.0)
+        # Each handle rides its own axis. Using a single max(rx, ry) radius -
+        # which is what this did - left the handles floating off the outline
+        # as soon as the shape was not a perfect circle.
+        rx = max(item.model.radius_x, 1.0)
+        ry = max(item.model.radius_y, 1.0)
+        # handle_angle defaults to -pi/2, so handle 0 points straight up: even
+        # indices ride the vertical axis (ry), odd ones the horizontal (rx).
         base = getattr(item, "handle_angle", -math.pi / 2.0)
         anchors: List[Tuple[float, float]] = []
         for idx, handle in enumerate(item.handles):
             angle = base + (idx * (math.pi / 2.0))
-            x = cx + math.cos(angle) * r
-            y = cy + math.sin(angle) * r
+            radius = ry if idx % 2 == 0 else rx
+            x = cx + math.cos(angle) * radius
+            y = cy + math.sin(angle) * radius
             handle.set_pos_silent(x, y)
             anchors.append((x, y))
         item.model.anchors = anchors
@@ -882,8 +904,18 @@ class CanvasEditor(QGraphicsView):
         angle = math.atan2(vy, vx)
         owner.handle_angle = angle - (index * (math.pi / 2.0))
         owner.model.center = (cx, cy)
-        owner.model.radius_x = radius
-        owner.model.radius_y = radius
+
+        # Even handles ride the vertical axis, odd ones the horizontal (see
+        # _update_circle_point_handles), so a drag resizes that axis alone and
+        # leaves the other as the user set it. Forcing both - which is what
+        # this did - silently threw away any ellipse typed into the RX/RY
+        # boxes the moment a handle was touched. Shift keeps it circular.
+        uniform = bool(QGuiApplication.keyboardModifiers() & Qt.ShiftModifier)
+        if uniform or index % 2 == 1:
+            owner.model.radius_x = radius
+        if uniform or index % 2 == 0:
+            owner.model.radius_y = radius
+
         owner.update_rect()
         self._update_circle_point_handles(owner)
         self.project.touch()
