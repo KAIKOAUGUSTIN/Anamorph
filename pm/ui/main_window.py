@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from pm.io.project_io import load_project, save_project
-from pm.model.commands import RemoveShapesCommand, ShapeEditCommand
+from pm.model.commands import AddShapeCommand, RemoveShapesCommand, ShapeEditCommand, duplicate_shape
 from pm.model.project import Project
 from pm.model.shapes import Shape, shape_to_dict
 from pm.model.workspace_manager import WorkspaceManager
@@ -152,23 +152,15 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
-        # Edit mode actions
-        self.action_mode_points = QAction("Points", self)
-        self.action_mode_scale = QAction("Scale", self)
-        self.action_mode_rotate = QAction("Rotate", self)
-        for action in (self.action_mode_points, self.action_mode_scale, self.action_mode_rotate):
-            action.setCheckable(True)
-            self.action_mode_points.setChecked(True)
-
-        mode_group = QActionGroup(self)
-        mode_group.setExclusive(True)
-        mode_group.addAction(self.action_mode_points)
-        mode_group.addAction(self.action_mode_scale)
-        mode_group.addAction(self.action_mode_rotate)
-
-        toolbar.addAction(self.action_mode_points)
-        toolbar.addAction(self.action_mode_scale)
-        toolbar.addAction(self.action_mode_rotate)
+        # Points/Scale/Rotate used to live here as exclusive modes. Scaling
+        # and rotating are modifiers on the drag now, so there is nothing to
+        # switch between - and no trip to the toolbar mid-show.
+        self.action_duplicate = QAction("Duplicate", self)
+        self.action_duplicate.setShortcut(QKeySequence("Ctrl+D"))
+        self.action_duplicate.setShortcutContext(Qt.ApplicationShortcut)
+        self.action_duplicate.setToolTip("Copy the selected surface, offset from the original (Ctrl+D)")
+        self.addAction(self.action_duplicate)
+        toolbar.addAction(self.action_duplicate)
 
         toolbar.addSeparator()
 
@@ -289,7 +281,7 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self.action_delete)
 
         # Status bar with styled mode indicator
-        self.mode_label = QLabel("POINTS")
+        self.mode_label = QLabel("DRAG MOVE · ALT ROTATE · CTRL SCALE")
         self.mode_label.setStyleSheet("""
             QLabel {
                 color: #00d4aa;
@@ -332,15 +324,13 @@ class MainWindow(QMainWindow):
         self.action_save.triggered.connect(lambda _checked=False: self._save_project())
         self.action_save_as.triggered.connect(lambda _checked=False: self._save_project(save_as=True))
 
-        self.action_mode_points.triggered.connect(lambda _checked=False: self.canvas.set_edit_mode("points"))
-        self.action_mode_scale.triggered.connect(lambda _checked=False: self.canvas.set_edit_mode("scale"))
-        self.action_mode_rotate.triggered.connect(lambda _checked=False: self.canvas.set_edit_mode("rotate"))
+        self.action_duplicate.triggered.connect(lambda _checked=False: self._duplicate_selected())
 
         self.canvas.selection_changed.connect(self._on_canvas_selection)
         self.canvas.zoom_changed.connect(self._on_canvas_zoom_changed)
-        self.canvas.edit_mode_changed.connect(self._on_edit_mode_changed)
         self.object_list.shape_selected.connect(self._on_list_selection)
         self.object_list.visibility_changed.connect(self._on_visibility_change)
+        self.object_list.solo_requested.connect(self._on_solo_requested)
 
         # Connect screen addition/removal signals (use instance)
         app = QGuiApplication.instance()
@@ -509,15 +499,42 @@ class MainWindow(QMainWindow):
         self.property_panel.set_shape(shape)
         self.object_list.select_shape(shape.id if shape else None)
 
-    def _on_edit_mode_changed(self, mode: str) -> None:
-        mode_labels = {"points": "POINTS", "scale": "SCALE", "rotate": "ROTATE"}
-        if mode == "points":
-            self.action_mode_points.setChecked(True)
-        elif mode == "scale":
-            self.action_mode_scale.setChecked(True)
-        elif mode == "rotate":
-            self.action_mode_rotate.setChecked(True)
-        self.mode_label.setText(mode_labels.get(mode, mode.upper()))
+    def _on_solo_requested(self, shape_id: str) -> None:
+        """Show only this surface, or restore everything if it already is.
+
+        One undo step for the whole toggle - soloing is a single act, not one
+        edit per layer.
+        """
+        others = [s for s in self.project.shapes if s.id != shape_id]
+        if not others:
+            return
+
+        # Already soloed if every other surface is hidden.
+        restoring = all(not s.visible for s in others)
+        target = self.project.get_shape(shape_id)
+
+        self.undo_stack.beginMacro("Unsolo" if restoring else "Solo")
+        for shape in self.project.shapes:
+            wanted = True if restoring else (shape is target)
+            if shape.visible == wanted:
+                continue
+            before = shape_to_dict(shape)
+            shape.visible = wanted
+            self.undo_stack.push(
+                ShapeEditCommand(self.project, shape.id, before, shape_to_dict(shape), "Solo")
+            )
+            self.canvas.set_shape_visibility(shape.id, wanted)
+        self.undo_stack.endMacro()
+
+    def _duplicate_selected(self) -> None:
+        item = self.canvas._current_selected_item()
+        if item is None:
+            self.statusBar().showMessage("Select a surface to duplicate", 3000)
+            return
+        copy = duplicate_shape(item.model)
+        self.undo_stack.push(AddShapeCommand(self.project, copy, "Duplicate Shape"))
+        self.canvas.select_shape(copy.id)
+        self.property_panel.set_shape(copy)
 
     def _on_list_selection(self, shape_id: str) -> None:
         self.canvas.select_shape(shape_id)

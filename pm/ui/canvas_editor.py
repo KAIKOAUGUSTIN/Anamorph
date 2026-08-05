@@ -439,6 +439,7 @@ class CanvasEditor(QGraphicsView):
         # (item, vertex index) of the last handle pressed, so arrow keys nudge
         # that corner instead of the whole surface.
         self._active_vertex: Optional[Tuple[object, int]] = None
+        self._body_drag: Dict[str, object] = {}
         self.setFocusPolicy(Qt.StrongFocus)
 
         self.items_by_id: Dict[str, object] = {}
@@ -559,11 +560,12 @@ class CanvasEditor(QGraphicsView):
 
         self._session.begin(model)
 
-    def _commit_edit(self) -> None:
+    GESTURE_LABELS = {"move": "Move Shape", "rotate": "Rotate Shape", "scale": "Scale Shape"}
+
+    def _commit_edit(self, label: Optional[str] = None) -> None:
         if self._session is None or not self._session.active:
             return
-        labels = {"points": "Move Points", "scale": "Scale Shape", "rotate": "Rotate Shape"}
-        self._session.commit(self.project, labels.get(self._edit_mode, "Edit Shape"))
+        self._session.commit(self.project, label or "Move Points")
 
     def set_tool(self, tool: str) -> None:
         self.tool = tool
@@ -1130,26 +1132,23 @@ class CanvasEditor(QGraphicsView):
     def mousePressEvent(self, event) -> None:
         if self.tool == "select" and event.button() == Qt.LeftButton:
             hit_item = self.itemAt(event.position().toPoint())
-            if event.modifiers() & Qt.ShiftModifier:
-                self._set_items_movable(True)
-                self.setDragMode(QGraphicsView.NoDrag)
-                self._begin_edit_for(hit_item)
-                super().mousePressEvent(event)
-                return
-            if isinstance(hit_item, VertexHandle) or \
-               isinstance(hit_item, (PolygonItem, CircleItem)) or (
-                hasattr(hit_item, "parentItem") and isinstance(hit_item.parentItem(), (PolygonItem, CircleItem))
-            ):
-                self._set_items_movable(False)
+            body = self._body_item_at(hit_item)
+
+            if isinstance(hit_item, VertexHandle):
                 self.setDragMode(QGraphicsView.NoDrag)
                 # Snapshot before Qt starts delivering move events.
                 self._begin_edit_for(hit_item)
-                if isinstance(hit_item, VertexHandle):
-                    self._active_vertex = (hit_item.owner, hit_item.index)
-                else:
-                    self._active_vertex = None
+                self._active_vertex = (hit_item.owner, hit_item.index)
+            elif body is not None:
+                self.setDragMode(QGraphicsView.NoDrag)
+                self._begin_edit_for(body)
+                self._active_vertex = None
+                # Dragging the body used to need Shift and only ever moved.
+                # It is the default now, with Alt and Ctrl for rotate/scale.
+                self._begin_body_drag(
+                    body, self.mapToScene(event.position().toPoint()), event.modifiers()
+                )
             else:
-                self._set_items_movable(False)
                 self._panning = True
                 self._pan_last = event.position()
                 self.setDragMode(QGraphicsView.NoDrag)
@@ -1171,7 +1170,23 @@ class CanvasEditor(QGraphicsView):
             return
         super().mousePressEvent(event)
 
+    def _body_item_at(self, hit_item):
+        """The shape a click landed on, ignoring which child it actually hit."""
+        if isinstance(hit_item, (PolygonItem, CircleItem)):
+            return hit_item
+        parent = getattr(hit_item, "parentItem", None)
+        if parent is not None and isinstance(hit_item.parentItem(), (PolygonItem, CircleItem)):
+            return hit_item.parentItem()
+        return None
+
     def mouseMoveEvent(self, event) -> None:
+        if self._body_drag:
+            if self._update_body_drag(
+                self.mapToScene(event.position().toPoint()), event.modifiers()
+            ):
+                event.accept()
+                return
+
         if self._panning and self._pan_last is not None:
             delta = event.position() - self._pan_last
             self._pan_last = event.position()
@@ -1202,14 +1217,15 @@ class CanvasEditor(QGraphicsView):
             self._panning = False
             self._pan_last = None
         if self.tool == "select" and event.button() == Qt.LeftButton:
-            self._set_items_movable(False)
             self.setDragMode(QGraphicsView.NoDrag)
             self._reset_item_drag()
             self._scale_state = {}
             self._rotate_state = {}
             self._circle_drag_state = {}
+            label = self.GESTURE_LABELS.get(self._body_drag.get("mode")) if self._body_drag else None
+            self._end_body_drag()
             self._clear_snap_marker()
-            self._commit_edit()
+            self._commit_edit(label)
         super().mouseReleaseEvent(event)
 
     NUDGE_STEP = 1.0
@@ -1233,6 +1249,131 @@ class CanvasEditor(QGraphicsView):
                 return
 
         super().keyPressEvent(event)
+
+    # --- body gestures ---------------------------------------------------
+    #
+    # Dragging the shape itself moves it; Alt rotates about its centre and
+    # Ctrl scales from it. Driving all three from the view rather than from
+    # Qt's ItemIsMovable keeps one code path, and is what lets Shift mean
+    # "constrain" instead of "actually move this time".
+
+    @staticmethod
+    def _shape_centre(shape: Shape) -> Tuple[float, float]:
+        if isinstance(shape, CircleShape):
+            return shape.center
+        points = shape.points
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        return ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0)
+
+    def _body_gesture(self, modifiers) -> str:
+        if modifiers & Qt.AltModifier:
+            return "rotate"
+        if modifiers & Qt.ControlModifier:
+            return "scale"
+        return "move"
+
+    def _begin_body_drag(self, item, scene_pos: QPointF, modifiers) -> None:
+        shape = item.model
+        if shape.locked:
+            self._body_drag = {}
+            return
+        self._body_drag = {
+            "item": item,
+            "mode": self._body_gesture(modifiers),
+            "start": (scene_pos.x(), scene_pos.y()),
+            "centre": self._shape_centre(shape),
+            "points": list(shape.points) if isinstance(shape, PolygonShape) else None,
+            "center": tuple(shape.center) if isinstance(shape, CircleShape) else None,
+            "anchors": list(shape.anchors) if isinstance(shape, CircleShape) else None,
+            "radius_x": getattr(shape, "radius_x", 0.0),
+            "radius_y": getattr(shape, "radius_y", 0.0),
+            "handle_angle": getattr(item, "handle_angle", 0.0),
+        }
+
+    def _update_body_drag(self, scene_pos: QPointF, modifiers) -> bool:
+        state = self._body_drag
+        if not state:
+            return False
+
+        item = state["item"]
+        shape = item.model
+        sx, sy = state["start"]
+        cx, cy = state["centre"]
+        dx, dy = scene_pos.x() - sx, scene_pos.y() - sy
+        mode = state["mode"]
+
+        if mode == "move":
+            if modifiers & Qt.ShiftModifier:
+                # Lock to whichever axis the hand committed to first.
+                if abs(dx) >= abs(dy):
+                    dy = 0.0
+                else:
+                    dx = 0.0
+            self._apply_body_move(item, shape, state, dx, dy)
+        elif mode == "rotate":
+            start_angle = math.atan2(sy - cy, sx - cx)
+            angle = math.atan2(scene_pos.y() - cy, scene_pos.x() - cx) - start_angle
+            if modifiers & Qt.ShiftModifier:
+                step = math.radians(15.0)
+                angle = round(angle / step) * step
+            self._apply_body_rotate(item, shape, state, angle)
+        else:  # scale
+            start_len = math.hypot(sx - cx, sy - cy)
+            if start_len < 1e-6:
+                return True
+            factor = math.hypot(scene_pos.x() - cx, scene_pos.y() - cy) / start_len
+            factor = max(0.05, factor)
+            self._apply_body_scale(item, shape, state, factor)
+
+        self._update_mode_handles(item)
+        self.project.touch()
+        return True
+
+    def _apply_body_move(self, item, shape, state, dx: float, dy: float) -> None:
+        if isinstance(shape, PolygonShape):
+            shape.points = [(x + dx, y + dy) for x, y in state["points"]]
+            item.update_path()
+        else:
+            ox, oy = state["center"]
+            shape.center = (ox + dx, oy + dy)
+            shape.anchors = [(x + dx, y + dy) for x, y in state["anchors"]]
+            item.update_rect()
+
+    def _apply_body_rotate(self, item, shape, state, angle: float) -> None:
+        cx, cy = state["centre"]
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+
+        def spin(x, y):
+            ox, oy = x - cx, y - cy
+            return (cx + ox * cos_a - oy * sin_a, cy + ox * sin_a + oy * cos_a)
+
+        if isinstance(shape, PolygonShape):
+            shape.points = [spin(x, y) for x, y in state["points"]]
+            item.update_path()
+        else:
+            # A circle has no orientation of its own, so rotating it turns the
+            # handles and the media inside it rather than the outline.
+            item.handle_angle = state["handle_angle"] + angle
+            if shape.media:
+                shape.media.transform.rotation = math.degrees(angle)
+            item.update_rect()
+
+    def _apply_body_scale(self, item, shape, state, factor: float) -> None:
+        cx, cy = state["centre"]
+        if isinstance(shape, PolygonShape):
+            shape.points = [
+                (cx + (x - cx) * factor, cy + (y - cy) * factor)
+                for x, y in state["points"]
+            ]
+            item.update_path()
+        else:
+            shape.radius_x = max(1.0, state["radius_x"] * factor)
+            shape.radius_y = max(1.0, state["radius_y"] * factor)
+            item.update_rect()
+
+    def _end_body_drag(self) -> None:
+        self._body_drag = {}
 
     def _nudge(self, dx: float, dy: float) -> bool:
         """Move the active vertex, or the whole shape if no vertex is armed.
@@ -1357,20 +1498,20 @@ class CanvasEditor(QGraphicsView):
         return items[0] if items else None
 
     def _set_handles_for_item(self, item) -> None:
-        if self._edit_mode == "points":
-            if isinstance(item, PolygonItem):
-                self._create_point_handles(item)
-                self._update_point_handles(item)
-            elif isinstance(item, CircleItem):
-                self._create_circle_point_handles(item)
-                self._update_circle_point_handles(item)
-        elif self._edit_mode == "scale":
-            if isinstance(item, PolygonItem):
-                self._create_scale_handles(item)
-            elif isinstance(item, CircleItem):
-                self._create_circle_scale_handles(item)
-        elif self._edit_mode == "rotate":
-            self._create_rotate_handle(item)
+        """One set of handles, always the vertices.
+
+        There is no mode to switch any more. Scaling and rotating are gestures
+        on the shape's body (Ctrl and Alt), so the canvas no longer has to
+        swap the handles out from under the user to offer them - and in a live
+        show a trip to the toolbar to change mode is a trip nobody has time
+        for.
+        """
+        if isinstance(item, PolygonItem):
+            self._create_point_handles(item)
+            self._update_point_handles(item)
+        elif isinstance(item, CircleItem):
+            self._create_circle_point_handles(item)
+            self._update_circle_point_handles(item)
         if item.isSelected():
             for handle in item.handles:
                 handle.setVisible(True)
@@ -1378,23 +1519,10 @@ class CanvasEditor(QGraphicsView):
     def _update_mode_handles(self, item) -> None:
         if not hasattr(item, "handles"):
             return
-        if self._edit_mode == "points":
-            if isinstance(item, PolygonItem):
-                self._update_point_handles(item)
-            elif isinstance(item, CircleItem):
-                self._update_circle_point_handles(item)
-        elif self._edit_mode == "scale":
-            if isinstance(item, PolygonItem):
-                self._update_scale_handles(item)
-            elif isinstance(item, CircleItem):
-                self._update_circle_scale_handles(item)
-        elif self._edit_mode == "rotate":
-            self._update_rotate_handle(item)
-
-    def _cycle_edit_mode(self) -> None:
-        order = ["points", "scale", "rotate"]
-        idx = order.index(self._edit_mode) if self._edit_mode in order else 0
-        self.set_edit_mode(order[(idx + 1) % len(order)])
+        if isinstance(item, PolygonItem):
+            self._update_point_handles(item)
+        elif isinstance(item, CircleItem):
+            self._update_circle_point_handles(item)
 
     def _reset_item_drag(self) -> None:
         for item in self.items_by_id.values():
