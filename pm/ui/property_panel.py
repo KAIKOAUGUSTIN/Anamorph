@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from pm.model.commands import EditSession
 from pm.model.media import MediaRef, SourceRect
 from pm.model.project import Project
-from pm.model.shapes import CircleShape, EdgeVisibility, PolygonShape, Shape
+from pm.model.shapes import CircleShape, EdgeVisibility, MeshShape, PolygonShape, Shape
 from pm.ui.source_region import SourceRegionPicker
 from pm.ui.widgets import ArrowSlider, ArrowSpinBox
 
@@ -172,6 +172,33 @@ class PropertyPanel(QWidget):
         points_layout = QVBoxLayout(self.points_group)
         points_layout.setContentsMargins(8, 8, 8, 8)
         points_layout.setSpacing(6)
+
+        # Mesh density. Coarse grids are easier to place; fine grids follow a
+        # tighter curve. Changing it resamples the existing surface rather
+        # than resetting it, so detail can be added late without losing work.
+        self.mesh_row = QWidget()
+        mesh_layout = QHBoxLayout(self.mesh_row)
+        mesh_layout.setContentsMargins(0, 0, 0, 0)
+        mesh_layout.setSpacing(6)
+        rows_label = QLabel("Rows")
+        rows_label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
+        cols_label = QLabel("Cols")
+        cols_label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
+        self.mesh_rows = ArrowSpinBox()
+        self.mesh_cols = ArrowSpinBox()
+        for box in (self.mesh_rows, self.mesh_cols):
+            box.setRange(1, 12)
+            box.setDecimals(0)
+            box.setSingleStep(1.0)
+            box.setFixedWidth(64)
+            box.setFixedHeight(24)
+            box.valueChanged.connect(self._on_mesh_grid_changed)
+        mesh_layout.addWidget(rows_label)
+        mesh_layout.addWidget(self.mesh_rows)
+        mesh_layout.addWidget(cols_label)
+        mesh_layout.addWidget(self.mesh_cols)
+        mesh_layout.addStretch(1)
+        points_layout.addWidget(self.mesh_row)
 
         polygon_buttons = QHBoxLayout()
         self.add_vertex_btn = QPushButton("+ Vertex")
@@ -544,6 +571,12 @@ class PropertyPanel(QWidget):
         """One editable X/Y row per vertex, or centre/radius for a circle."""
         self._clear_coord_rows()
 
+        if isinstance(shape, MeshShape):
+            # A 4x4 grid is 25 rows of boxes - the canvas handles are the
+            # usable way in, and the density control is what belongs here.
+            self.updateGeometry()
+            return
+
         if isinstance(shape, PolygonShape):
             for idx, (x, y) in enumerate(shape.points):
                 row = QWidget()
@@ -594,6 +627,8 @@ class PropertyPanel(QWidget):
         if shape is None:
             return
 
+        if isinstance(shape, MeshShape):
+            return
         expected = len(shape.points) if isinstance(shape, PolygonShape) else 4
         if len(self._coord_rows) != expected:
             self._updating = True
@@ -689,6 +724,16 @@ class PropertyPanel(QWidget):
                 self._shape.media.source_rect,
             )
 
+    def _on_mesh_grid_changed(self, _value: float) -> None:
+        if self._updating or not isinstance(self._shape, MeshShape):
+            return
+        rows, cols = int(self.mesh_rows.value()), int(self.mesh_cols.value())
+        if (rows, cols) == (self._shape.rows, self._shape.cols):
+            return
+        self._shape.resize_grid(rows, cols)
+        self._populate_coords(self._shape)
+        self._commit("Mesh Density")
+
     def _on_lock_toggled(self, checked: bool) -> None:
         if self._updating or not self._shape:
             return
@@ -712,7 +757,16 @@ class PropertyPanel(QWidget):
         self._commit("Set Circle Geometry")
 
     def _update_point_controls(self, shape: Shape) -> None:
-        if isinstance(shape, CircleShape):
+        self.mesh_row.setVisible(isinstance(shape, MeshShape))
+        if isinstance(shape, MeshShape):
+            self.points_group.setVisible(True)
+            self.add_vertex_btn.setEnabled(False)
+            self.remove_vertex_btn.setEnabled(False)
+            self._updating = True
+            self.mesh_rows.setValue(shape.rows)
+            self.mesh_cols.setValue(shape.cols)
+            self._updating = False
+        elif isinstance(shape, CircleShape):
             # Circles are edited through the four axis handles and the
             # RX/RY boxes; there are no vertices to add or remove.
             self.points_group.setVisible(True)

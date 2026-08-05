@@ -30,7 +30,7 @@ python projection_gui.py
 
 - `pm/model/` - Data models (dataclasses, no Qt dependency)
   - `project.py` - Project root with CanvasSettings, shape list, media library; emits `changed` signal via QObject inheritance
-  - `shapes.py` - PolygonShape and CircleShape dataclasses with serialization via `shape_to_dict`/`shape_from_dict`
+  - `shapes.py` - PolygonShape, CircleShape and MeshShape dataclasses with serialization via `shape_to_dict`/`shape_from_dict`
   - `media.py` - MediaRef (image/video) with fit modes, UV transform, and `SourceRect` (which region of the media feeds the surface)
   - `effects.py` - Effects (pulse, strobe, RGB shift) with parameters
   - `commands.py` - Undoable edits as `QUndoCommand`s, plus `EditSession` for turning a drag into one step
@@ -55,7 +55,7 @@ python projection_gui.py
   - `homography.py` - Corner-pin math (numpy only, no Qt/GL), shared by the renderer and the editor preview
   - `fit.py` - `content_rect`: where media sits inside a surface's box. The single source of truth for stretch/contain/cover
   - `test_pattern.py` - Calibration images (grid / checkerboard / borders) drawn with QPainter
-  - `mesh.py` - Triangulation using mapbox_earcut for polygon mesh generation
+  - `mesh.py` - Triangulation using mapbox_earcut, plus `tessellate_mesh`/`mesh_outline`: the Catmull-Rom patch behind `MeshShape`
 
 - `pm/media/` - Media handling
   - `video_player.py` - OpenCV-based video playback with threading, looping, and RGB conversion
@@ -68,9 +68,20 @@ python projection_gui.py
 
 1. **Signal-based Updates**: Project.changed signal propagates to UI components; circular updates prevented by `blockSignals` in zoom controls
 
-2. **Shape Types**: Two shape types supported:
+2. **Shape Types**: Three shape types supported:
    - `PolygonShape`: Variable points with per-edge visibility control
    - `CircleShape`: Elliptical with control points and anchor system
+   - `MeshShape`: A control grid of `(rows + 1) x (cols + 1)` points, row-major
+
+   A polygon with a corner pin describes a *flat* plane seen off-axis. A column, a cylinder, a dome or a hung cloth is curved, and no arrangement of four corners can express that - the surface has to bend *between* its corners. `MeshShape` is that surface.
+
+   The control grid is coarse because it is what a person drags; `tessellate_mesh` (`pm/render/mesh.py`) smooths it into a dense render mesh with a **Catmull-Rom** patch, which passes *through* every control point - what the operator positions is exactly where the surface goes, with curvature filled in between. Neighbour lookup at the boundary clamps rather than wraps (`_clamped`): wrapping would pull the far edge of the surface into the near one.
+
+   UVs come from the parametric grid position, not from canvas coordinates, so media flows *along* the bend; `source_rect` and `MediaTransform` still compose on top in the shader. Per-vertex UVs are honest here only because the patch is subdivided - across a coarse cell the interpolation error would be visible, across a subdivided one it is far below a pixel.
+
+   The editor mirrors it in `canvas_editor._paint_mesh_media`, filling one tessellated triangle at a time. `QTransform.quadToQuad` refuses a triangle with a repeated corner, so `_triangle_transform` solves the 2x3 affine directly from the three point pairs. That pass sets `Antialiasing False`: an antialiased clip edge blends with what is behind it, so every shared triangle edge would show up as a pale hairline and the tessellation would be visible through the media.
+
+   `resize_grid` resamples the *current* patch instead of rebuilding a flat grid, so density can be raised late without losing the bending already done.
 
 3. **Media Mapping**: UVs come from the shape's fit mode (`stretch`/`contain`/`cover`), computed per vertex in `_compute_fit_uvs`.
 
@@ -110,7 +121,7 @@ python projection_gui.py
 
 Projects saved as JSON with `.pmap.json` extension containing:
 - Canvas dimensions and background color
-- Shapes array with full state (points, colors, media, effects)
+- Shapes array with full state (points, colors, media, effects); a mesh also stores `rows`/`cols`
 - Media library paths
 - `outputs`: one entry per projector (region, keystone corners, blend, colour)
 - UI state (`last_projection_screen_id`, `test_mode`, `test_pattern`)
@@ -135,7 +146,7 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 ## User Interface
 
 ### Toolbar Actions
-- **Polygon/Circle** - Add new shapes
+- **Polygon/Circle/Mesh** - Add new shapes. Mesh is the bendable one: a control grid for columns, cylinders and domes
 - **Duplicate** - Copy the selected surface with an offset (`Ctrl+D`)
 - **Snap** - Magnetic snapping of dragged vertices to other surfaces
 - **Project** - Toggle fullscreen projection to selected screen
@@ -178,6 +189,7 @@ pytest
 - `tests/test_outputs.py` - blend-curve complementarity, tiling, clamping, output persistence
 - `tests/test_project_store.py` - session round trip and legacy workspace migration
 - `tests/test_output_ui.py` - the outputs dialog and one projection window per enabled output
+- `tests/test_mesh.py` - patch interpolation, UVs following the bend, density resampling, mesh handles and gestures
 
 Rendering itself is not covered by the suite: `QOpenGLWidget` refuses to create a
 context on the `offscreen` platform. To check the actual output, run under a real

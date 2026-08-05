@@ -161,7 +161,102 @@ class CircleShape:
         return shape
 
 
-Shape = Union[PolygonShape, CircleShape]
+@dataclass
+class MeshShape:
+    """A surface that bends: a grid of control points, not four corners.
+
+    Corner pin describes a flat plane seen off-axis. A column, a cylinder, a
+    dome or a hung cloth is curved, and no arrangement of four corners can
+    express that - the surface has to bend between them. `rows` and `cols`
+    count cells, so the control grid holds (rows + 1) x (cols + 1) points in
+    row-major order.
+
+    Coarse on purpose: the grid is what a person drags. Curvature between the
+    control points is filled in by `tessellate_mesh`.
+    """
+
+    id: str
+    name: str
+    rows: int
+    cols: int
+    points: List[Tuple[float, float]]
+    fill_color: List[int] = field(default_factory=default_fill_color)
+    stroke_color: List[int] = field(default_factory=default_stroke_color)
+    stroke_width: float = 2.0
+    opacity: float = 1.0
+    blend_mode: str = "normal"
+    media: MediaRef = field(default_factory=MediaRef)
+    effects: Effects = field(default_factory=Effects)
+    visible: bool = True
+    locked: bool = False
+
+    @property
+    def type(self) -> str:
+        return "mesh"
+
+    @property
+    def grid_rows(self) -> int:
+        return self.rows + 1
+
+    @property
+    def grid_cols(self) -> int:
+        return self.cols + 1
+
+    def point_at(self, row: int, col: int) -> Tuple[float, float]:
+        return self.points[row * self.grid_cols + col]
+
+    def resize_grid(self, rows: int, cols: int) -> None:
+        """Change the grid density, keeping the surface where it is.
+
+        The new control points are sampled from the current patch, so raising
+        the density adds detail without moving anything the operator already
+        placed.
+        """
+        from pm.render.mesh import tessellate_mesh
+
+        rows = max(1, int(rows))
+        cols = max(1, int(cols))
+        if (rows, cols) == (self.rows, self.cols):
+            return
+
+        positions, _uvs, _indices = tessellate_mesh(self.points, self.rows, self.cols, 8)
+        if not positions:
+            return
+        steps_x = self.cols * 8
+        steps_y = self.rows * 8
+        stride = steps_x + 1
+
+        sampled: List[Tuple[float, float]] = []
+        for r in range(rows + 1):
+            for c in range(cols + 1):
+                iy = round(r / rows * steps_y)
+                ix = round(c / cols * steps_x)
+                sampled.append(positions[iy * stride + ix])
+
+        self.rows, self.cols, self.points = rows, cols, sampled
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MeshShape":
+        rows = max(1, int(data.get("rows", 2)))
+        cols = max(1, int(data.get("cols", 2)))
+        points = [
+            (float(p.get("x", 0.0)), float(p.get("y", 0.0)))
+            for p in data.get("points", [])
+        ]
+        expected = (rows + 1) * (cols + 1)
+        if len(points) != expected:
+            points = _flat_grid((0.0, 0.0), (200.0, 200.0), rows, cols)
+        return cls(
+            id=data.get("id", new_shape_id()),
+            name=data.get("name", "Malha"),
+            rows=rows,
+            cols=cols,
+            points=points,
+            **_common_shape_kwargs(data),
+        )
+
+
+Shape = Union[PolygonShape, CircleShape, MeshShape]
 
 
 def _common_shape_kwargs(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -176,6 +271,40 @@ def _common_shape_kwargs(data: Dict[str, Any]) -> Dict[str, Any]:
         "visible": bool(data.get("visible", True)),
         "locked": bool(data.get("locked", False)),
     }
+
+
+def _flat_grid(
+    top_left: Tuple[float, float],
+    bottom_right: Tuple[float, float],
+    rows: int,
+    cols: int,
+) -> List[Tuple[float, float]]:
+    x0, y0 = top_left
+    x1, y1 = bottom_right
+    return [
+        (x0 + (x1 - x0) * (c / cols), y0 + (y1 - y0) * (r / rows))
+        for r in range(rows + 1)
+        for c in range(cols + 1)
+    ]
+
+
+def mesh_from_rect(
+    center: Tuple[float, float],
+    size: float,
+    rows: int = 2,
+    cols: int = 2,
+    name: Optional[str] = None,
+) -> MeshShape:
+    """A flat grid to start from; the operator bends it into the surface."""
+    half = size / 2.0
+    cx, cy = center
+    return MeshShape(
+        id=new_shape_id(),
+        name=name or "Malha",
+        rows=max(1, rows),
+        cols=max(1, cols),
+        points=_flat_grid((cx - half, cy - half), (cx + half, cy + half), max(1, rows), max(1, cols)),
+    )
 
 
 def polygon_from_points(points: List[Tuple[float, float]], name: Optional[str] = None) -> PolygonShape:
@@ -225,6 +354,10 @@ def shape_to_dict(shape: Shape) -> Dict[str, Any]:
     if isinstance(shape, PolygonShape):
         data["points"] = [{"x": p[0], "y": p[1]} for p in shape.points]
         data["edges"] = [edge.to_dict() for edge in shape.edges]
+    elif isinstance(shape, MeshShape):
+        data["rows"] = int(shape.rows)
+        data["cols"] = int(shape.cols)
+        data["points"] = [{"x": p[0], "y": p[1]} for p in shape.points]
     elif isinstance(shape, CircleShape):
         data["center"] = {"x": shape.center[0], "y": shape.center[1]}
         data["radius"] = float(shape.radius)
@@ -241,4 +374,6 @@ def shape_from_dict(data: Dict[str, Any]) -> Shape:
         return PolygonShape.from_dict(data)
     elif shape_type == "circle":
         return CircleShape.from_dict(data)
+    elif shape_type == "mesh":
+        return MeshShape.from_dict(data)
     return PolygonShape.from_dict(data)
