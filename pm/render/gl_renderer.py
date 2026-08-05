@@ -41,11 +41,11 @@ from PySide6.QtWidgets import QWidget
 from pm.media.video_player import VideoPlayer
 from pm.model.media import MediaRef
 from pm.model.project import Project
-from pm.model.shapes import CircleShape, PolygonShape, Shape
+from pm.model.shapes import CircleShape, MeshShape, PolygonShape, Shape
 from pm.model.output import Output
 from pm.render.fit import content_rect, leaves_unit_square
 from pm.render.homography import canvas_to_uv_matrix, corner_uv_assignment
-from pm.render.mesh import triangulate_circle, triangulate_polygon
+from pm.render.mesh import mesh_outline, tessellate_mesh, triangulate_circle, triangulate_polygon
 from pm.render.test_pattern import GRID, render_test_pattern
 from pm.render.shaders import (
     FRAGMENT_SHADER_OUTPUT, FRAGMENT_SHADER_SOLID, FRAGMENT_SHADER_STROKE,
@@ -99,6 +99,9 @@ class GLRenderer(QOpenGLWidget):
 
     def cleanup(self) -> None:
         """Clean up OpenGL resources."""
+        # Stop the repaint timer first: it fires every 16ms, and a paint after
+        # the programs are deleted uses handles that no longer exist.
+        self._timer.stop()
         for player in self._video_players.values():
             player.stop()
         self._video_players.clear()
@@ -366,7 +369,10 @@ class GLRenderer(QOpenGLWidget):
                 max(tex_size[0] * region.width, 1.0),
                 max(tex_size[1] * region.height, 1.0),
             )
-            uvs = self._compute_uvs_from_size(points, fit_size, shape.media)
+            if isinstance(shape, MeshShape):
+                uvs = self._mesh_uvs(shape)
+            else:
+                uvs = self._compute_uvs_from_size(points, fit_size, shape.media)
             uv_matrix = self._warp_matrix(shape, points)
             self._draw_textured_shape(
                 points, uvs, indices, tex_id, opacity, shape, now,
@@ -595,7 +601,9 @@ class GLRenderer(QOpenGLWidget):
                 continue
 
             alpha = self._stroke_alpha(shape)
-            if isinstance(shape, PolygonShape):
+            if isinstance(shape, MeshShape):
+                self._render_mesh_stroke(shape, alpha, canvas_w, canvas_h)
+            elif isinstance(shape, PolygonShape):
                 self._render_polygon_stroke(shape, alpha, canvas_w, canvas_h)
             elif isinstance(shape, CircleShape):
                 self._render_circle_stroke(shape, alpha, canvas_w, canvas_h)
@@ -618,6 +626,13 @@ class GLRenderer(QOpenGLWidget):
                 dy = (p2[1] - p1[1]) * edge.percent
                 p2 = (p1[0] + dx, p1[1] + dy)
             segments.append((p1, p2))
+        self._draw_segments(segments, shape.stroke_color[:3], alpha, shape.stroke_width, canvas_w, canvas_h)
+
+    def _render_mesh_stroke(self, shape: MeshShape, alpha: float, canvas_w: float, canvas_h: float) -> None:
+        outline = mesh_outline(shape.points, shape.rows, shape.cols)
+        if len(outline) < 2:
+            return
+        segments = [(outline[i], outline[(i + 1) % len(outline)]) for i in range(len(outline))]
         self._draw_segments(segments, shape.stroke_color[:3], alpha, shape.stroke_width, canvas_w, canvas_h)
 
     def _render_circle_stroke(self, shape: CircleShape, alpha: float, canvas_w: float, canvas_h: float) -> None:
@@ -705,6 +720,9 @@ class GLRenderer(QOpenGLWidget):
 
     def _shape_geometry(self, shape: Shape) -> Tuple[List[Tuple[float, float]], List[int]]:
         """Get triangulated geometry for a shape."""
+        if isinstance(shape, MeshShape):
+            positions, _uvs, indices = tessellate_mesh(shape.points, shape.rows, shape.cols)
+            return positions, indices
         if isinstance(shape, PolygonShape):
             points = list(shape.points)
             indices = triangulate_polygon(points)
@@ -713,6 +731,15 @@ class GLRenderer(QOpenGLWidget):
             points, indices = triangulate_circle(shape.center, shape.radius_x, shape.radius_y, 48)
             return points, indices
         return [], []
+
+    def _mesh_uvs(self, shape: MeshShape) -> List[Tuple[float, float]]:
+        """UVs straight from the grid's parametric position.
+
+        A bounding-box fit cannot describe a bent surface: the media has to
+        flow *along* the mesh, not across the rectangle it happens to occupy.
+        """
+        _positions, uvs, _indices = tessellate_mesh(shape.points, shape.rows, shape.cols)
+        return uvs
 
     def _compute_uvs(
         self,

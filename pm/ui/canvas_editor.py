@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
+
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
@@ -28,8 +30,12 @@ from pm.media.image_cache import get_qimage
 from pm.model.commands import AddShapeCommand, EditSession
 from pm.model.project import Project
 from pm.model.snapping import find_snap, shape_edges, shape_vertices, snap_to_grid
-from pm.model.shapes import CircleShape, EdgeVisibility, PolygonShape, Shape, circle_from_center, polygon_from_points
+from pm.model.shapes import (
+    CircleShape, EdgeVisibility, MeshShape, PolygonShape, Shape,
+    circle_from_center, mesh_from_rect, polygon_from_points,
+)
 from pm.render.fit import content_rect
+from pm.render.mesh import mesh_outline, tessellate_mesh
 from pm.render.homography import corner_uv_assignment
 
 
@@ -191,6 +197,81 @@ def _paint_media(painter: QPainter, shape: Shape, path: QPainterPath) -> bool:
 
     painter.restore()
     return True
+
+
+def _paint_mesh_media(painter: QPainter, shape: MeshShape) -> bool:
+    """Draw media across a bent surface, triangle by triangle.
+
+    QPainter has no mesh primitive, so each tessellated triangle is filled
+    with an affine map from its own slice of the media. Across a subdivided
+    patch the pieces are small enough that the seams do not read - and this is
+    the preview; the projector gets the same UVs through the shader.
+    """
+    media = getattr(shape, "media", None)
+    if not media or media.kind != "image":
+        return False
+    image = get_qimage(media.path)
+    if image is None:
+        return False
+
+    positions, uvs, indices = tessellate_mesh(shape.points, shape.rows, shape.cols)
+    if not indices:
+        return False
+
+    region = media.source_rect.normalised()
+    width, height = image.width(), image.height()
+
+    painter.save()
+    painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+    # Antialiasing off for this pass: an antialiased clip edge blends with
+    # whatever is behind it, so every shared triangle edge would show up as a
+    # pale hairline and the tessellation would be visible through the media.
+    painter.setRenderHint(QPainter.Antialiasing, False)
+    for i in range(0, len(indices), 3):
+        tri = indices[i:i + 3]
+        target = QPolygonF([QPointF(*positions[k]) for k in tri])
+        source = QPolygonF([
+            QPointF((region.u0 + uvs[k][0] * region.width) * width,
+                    (region.v0 + uvs[k][1] * region.height) * height)
+            for k in tri
+        ])
+        transform = _triangle_transform(source, target)
+        if transform is None:
+            continue
+        painter.save()
+        painter.setClipPath(_polygon_path(target))
+        painter.setTransform(transform, True)
+        painter.drawImage(0, 0, image)
+        painter.restore()
+    painter.restore()
+    return True
+
+
+def _triangle_transform(source: QPolygonF, target: QPolygonF) -> Optional[QTransform]:
+    """Affine map between two triangles.
+
+    QTransform.quadToQuad needs four distinct corners and refuses a triangle
+    with a repeated point, so the 2x3 affine is solved directly. Three point
+    pairs determine it exactly - no homography needed, and none wanted: the
+    curvature lives in the tessellation, not in each tiny face.
+    """
+    a = np.array([[source[i].x(), source[i].y(), 1.0] for i in range(3)], dtype=np.float64)
+    if abs(np.linalg.det(a)) < 1e-12:
+        return None
+    try:
+        col_x = np.linalg.solve(a, np.array([target[i].x() for i in range(3)], dtype=np.float64))
+        col_y = np.linalg.solve(a, np.array([target[i].y() for i in range(3)], dtype=np.float64))
+    except np.linalg.LinAlgError:
+        return None
+
+    return QTransform(col_x[0], col_y[0], col_x[1], col_y[1], col_x[2], col_y[2])
+
+
+def _polygon_path(polygon: QPolygonF) -> QPainterPath:
+    path = QPainterPath()
+    path.addPolygon(polygon)
+    path.closeSubpath()
+    return path
 
 
 def _warp_transform(shape: PolygonShape, image: QImage, region) -> Optional[QTransform]:
@@ -375,6 +456,60 @@ class PolygonItem(QGraphicsPathItem):
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(self.path())
 
+class MeshItem(QGraphicsPathItem):
+    """A bendable surface, drawn from its smoothed patch."""
+
+    def __init__(self, model: MeshShape) -> None:
+        super().__init__()
+        self.model = model
+        self.handles: List[VertexHandle] = []
+        self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
+        self.update_path()
+
+    def set_handles_visible(self, visible: bool) -> None:
+        for handle in self.handles:
+            handle.setVisible(visible)
+
+    def update_path(self) -> None:
+        outline = mesh_outline(self.model.points, self.model.rows, self.model.cols)
+        path = QPainterPath()
+        if outline:
+            path.moveTo(*outline[0])
+            for point in outline[1:]:
+                path.lineTo(*point)
+            path.closeSubpath()
+        self.setPath(path)
+
+    def sync_style(self) -> None:
+        self.update_path()
+
+    def paint(self, painter, option, widget=None) -> None:
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        if not _paint_mesh_media(painter, self.model):
+            painter.fillPath(self.path(), QBrush(QColor(*self.model.fill_color)))
+
+        if self.model.stroke_width > 0:
+            painter.setPen(QPen(QColor(*self.model.stroke_color), max(self.model.stroke_width, 0.5)))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(self.path())
+
+        if option.state & QStyle.State_Selected:
+            # The control lattice, so it is clear what the handles bend.
+            painter.setPen(QPen(QColor(0, 212, 170, 90), 1.0, Qt.DotLine))
+            model = self.model
+            for r in range(model.grid_rows):
+                for c in range(model.grid_cols - 1):
+                    a, b = model.point_at(r, c), model.point_at(r, c + 1)
+                    painter.drawLine(a[0], a[1], b[0], b[1])
+            for c in range(model.grid_cols):
+                for r in range(model.grid_rows - 1):
+                    a, b = model.point_at(r, c), model.point_at(r + 1, c)
+                    painter.drawLine(a[0], a[1], b[0], b[1])
+
+            painter.setPen(QPen(QColor(0, 212, 170, 220), 2.0, Qt.DashLine))
+            painter.drawPath(self.path())
+
+
 class CircleItem(QGraphicsEllipseItem):
     def __init__(self, model: CircleShape) -> None:
         super().__init__()
@@ -528,7 +663,9 @@ class CanvasEditor(QGraphicsView):
         for shape in self.project.shapes:
             if shape.id == exclude_shape_id or not shape.visible:
                 continue
-            if isinstance(shape, PolygonShape):
+            if isinstance(shape, MeshShape):
+                vertices.extend(shape_vertices(shape.points))
+            elif isinstance(shape, PolygonShape):
                 vertices.extend(shape_vertices(shape.points))
                 edges.extend(shape_edges(shape.points))
             elif isinstance(shape, CircleShape):
@@ -585,9 +722,9 @@ class CanvasEditor(QGraphicsView):
         model = None
         if isinstance(hit_item, VertexHandle):
             model = getattr(hit_item.owner, "model", None)
-        elif isinstance(hit_item, (PolygonItem, CircleItem)):
+        elif isinstance(hit_item, (PolygonItem, CircleItem, MeshItem)):
             model = hit_item.model
-        elif hit_item is not None and isinstance(hit_item.parentItem(), (PolygonItem, CircleItem)):
+        elif hit_item is not None and isinstance(hit_item.parentItem(), (PolygonItem, CircleItem, MeshItem)):
             model = hit_item.parentItem().model
         else:
             model = getattr(self._current_selected_item(), "model", None)
@@ -669,6 +806,11 @@ class CanvasEditor(QGraphicsView):
 
 
     def _create_item(self, shape: Shape):
+        if isinstance(shape, MeshShape):
+            item = MeshItem(shape)
+            item.setVisible(shape.visible)
+            self._create_mesh_handles(item)
+            return item
         if isinstance(shape, PolygonShape):
             item = PolygonItem(shape)
             item.setVisible(shape.visible)
@@ -682,6 +824,11 @@ class CanvasEditor(QGraphicsView):
         raise ValueError("Shape desconhecido")
 
     def _update_item(self, item, shape: Shape) -> None:
+        if isinstance(item, MeshItem):
+            item.update_path()
+            item.setVisible(shape.visible)
+            self._update_mesh_handles(item)
+            return
         if isinstance(item, PolygonItem):
             item.update_path()
             item.sync_style()
@@ -698,6 +845,39 @@ class CanvasEditor(QGraphicsView):
             handle.setParentItem(None)
             self.scene.removeItem(handle)
         item.handles = []
+
+    def _create_mesh_handles(self, item: MeshItem) -> None:
+        self._clear_handles(item)
+        for index in range(len(item.model.points)):
+            handle = VertexHandle(
+                item, index, self._on_mesh_handle_moved,
+                lambda p, o=item: self._snap_vertex(o, p),
+            )
+            handle.setParentItem(item)
+            handle.setVisible(False)
+            item.handles.append(handle)
+        self._update_mesh_handles(item)
+
+    def _update_mesh_handles(self, item: MeshItem) -> None:
+        if len(item.handles) != len(item.model.points):
+            self._create_mesh_handles(item)
+            return
+        for handle, point in zip(item.handles, item.model.points):
+            handle.set_pos_silent(point[0], point[1])
+        visible = item.isSelected()
+        for handle in item.handles:
+            handle.setVisible(visible)
+
+    def _on_mesh_handle_moved(self, owner: MeshItem, index: int, pos: QPointF) -> None:
+        shape = owner.model
+        if shape.locked or index >= len(shape.points):
+            return
+        scene_pos = owner.mapToScene(pos)
+        points = list(shape.points)
+        points[index] = (scene_pos.x(), scene_pos.y())
+        shape.points = points
+        owner.update_path()
+        self.project.touch()
 
     def _create_point_handles(self, item: PolygonItem) -> None:
         self._clear_handles(item)
@@ -917,14 +1097,16 @@ class CanvasEditor(QGraphicsView):
                 self._panning = True
                 self._pan_last = event.position()
                 self.setDragMode(QGraphicsView.NoDrag)
-        if event.button() == Qt.LeftButton and self.tool in ("polygon", "circle"):
+        if event.button() == Qt.LeftButton and self.tool in ("polygon", "circle", "mesh"):
             scene_pos = self._snap_point(self.mapToScene(event.position().toPoint()))
             if self.tool == "polygon":
                 shape = self._create_default_polygon(scene_pos, 120.0, "Polígono")
+            elif self.tool == "mesh":
+                shape = mesh_from_rect((scene_pos.x(), scene_pos.y()), 200.0, name="Malha")
             else:
                 shape = circle_from_center((scene_pos.x(), scene_pos.y()), 60.0, name="Círculo")
             if self.undo_stack is not None:
-                label = "Add Polygon" if self.tool == "polygon" else "Add Circle"
+                label = {"polygon": "Add Polygon", "mesh": "Add Mesh"}.get(self.tool, "Add Circle")
                 self.undo_stack.push(AddShapeCommand(self.project, shape, label))
             else:
                 self.project.add_shape(shape)
@@ -936,10 +1118,10 @@ class CanvasEditor(QGraphicsView):
 
     def _body_item_at(self, hit_item):
         """The shape a click landed on, ignoring which child it actually hit."""
-        if isinstance(hit_item, (PolygonItem, CircleItem)):
+        if isinstance(hit_item, (PolygonItem, CircleItem, MeshItem)):
             return hit_item
         parent = getattr(hit_item, "parentItem", None)
-        if parent is not None and isinstance(hit_item.parentItem(), (PolygonItem, CircleItem)):
+        if parent is not None and isinstance(hit_item.parentItem(), (PolygonItem, CircleItem, MeshItem)):
             return hit_item.parentItem()
         return None
 
@@ -1046,7 +1228,7 @@ class CanvasEditor(QGraphicsView):
             "mode": mode or self._body_gesture(modifiers),
             "start": (scene_pos.x(), scene_pos.y()),
             "centre": self._shape_centre(shape),
-            "points": list(shape.points) if isinstance(shape, PolygonShape) else None,
+            "points": list(shape.points) if isinstance(shape, (PolygonShape, MeshShape)) else None,
             "center": tuple(shape.center) if isinstance(shape, CircleShape) else None,
             "anchors": list(shape.anchors) if isinstance(shape, CircleShape) else None,
             "radius_x": getattr(shape, "radius_x", 0.0),
@@ -1094,7 +1276,7 @@ class CanvasEditor(QGraphicsView):
         return True
 
     def _apply_body_move(self, item, shape, state, dx: float, dy: float) -> None:
-        if isinstance(shape, PolygonShape):
+        if isinstance(shape, (PolygonShape, MeshShape)):
             shape.points = [(x + dx, y + dy) for x, y in state["points"]]
             item.update_path()
         else:
@@ -1111,7 +1293,7 @@ class CanvasEditor(QGraphicsView):
             ox, oy = x - cx, y - cy
             return (cx + ox * cos_a - oy * sin_a, cy + ox * sin_a + oy * cos_a)
 
-        if isinstance(shape, PolygonShape):
+        if isinstance(shape, (PolygonShape, MeshShape)):
             shape.points = [spin(x, y) for x, y in state["points"]]
             item.update_path()
         else:
@@ -1124,7 +1306,7 @@ class CanvasEditor(QGraphicsView):
 
     def _apply_body_scale(self, item, shape, state, factor: float) -> None:
         cx, cy = state["centre"]
-        if isinstance(shape, PolygonShape):
+        if isinstance(shape, (PolygonShape, MeshShape)):
             shape.points = [
                 (cx + (x - cx) * factor, cy + (y - cy) * factor)
                 for x, y in state["points"]
@@ -1217,7 +1399,7 @@ class CanvasEditor(QGraphicsView):
             vertex_index = self._active_vertex[1]
 
         shape = item.model
-        if isinstance(shape, PolygonShape):
+        if isinstance(shape, (PolygonShape, MeshShape)):
             points = list(shape.points)
             if vertex_index is not None and vertex_index < len(points):
                 x, y = points[vertex_index]
@@ -1290,7 +1472,7 @@ class CanvasEditor(QGraphicsView):
         except RuntimeError:
             return
         for item in items:
-            if isinstance(item, (PolygonItem, CircleItem)):
+            if isinstance(item, (PolygonItem, CircleItem, MeshItem)):
                 item.set_handles_visible(False)
         selected = self.scene.selectedItems()
         # An armed vertex only makes sense while its own shape stays selected.
@@ -1299,7 +1481,7 @@ class CanvasEditor(QGraphicsView):
                 self._active_vertex = None
         if selected:
             item = selected[0]
-            if isinstance(item, (PolygonItem, CircleItem)):
+            if isinstance(item, (PolygonItem, CircleItem, MeshItem)):
                 self._set_handles_for_item(item)
                 item.set_handles_visible(True)
                 self._build_transform_handles(item)
@@ -1321,7 +1503,9 @@ class CanvasEditor(QGraphicsView):
         show a trip to the toolbar to change mode is a trip nobody has time
         for.
         """
-        if isinstance(item, PolygonItem):
+        if isinstance(item, MeshItem):
+            self._create_mesh_handles(item)
+        elif isinstance(item, PolygonItem):
             self._create_point_handles(item)
             self._update_point_handles(item)
         elif isinstance(item, CircleItem):
@@ -1334,7 +1518,9 @@ class CanvasEditor(QGraphicsView):
     def _update_mode_handles(self, item) -> None:
         if not hasattr(item, "handles"):
             return
-        if isinstance(item, PolygonItem):
+        if isinstance(item, MeshItem):
+            self._update_mesh_handles(item)
+        elif isinstance(item, PolygonItem):
             self._update_point_handles(item)
         elif isinstance(item, CircleItem):
             self._update_circle_point_handles(item)

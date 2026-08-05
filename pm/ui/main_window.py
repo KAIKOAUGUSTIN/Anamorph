@@ -136,8 +136,13 @@ class MainWindow(QMainWindow):
         self.action_select = QAction("Select", self)
         self.action_polygon = QAction("Polygon", self)
         self.action_circle = QAction("Circle", self)
+        self.action_mesh = QAction("Mesh", self)
+        self.action_mesh.setToolTip(
+            "A surface that bends: a grid of control points for columns,\n"
+            "cylinders, domes and anything else four corners cannot describe."
+        )
 
-        for action in (self.action_select, self.action_polygon, self.action_circle):
+        for action in (self.action_select, self.action_polygon, self.action_circle, self.action_mesh):
             action.setCheckable(True)
             self.action_select.setChecked(True)
 
@@ -146,10 +151,12 @@ class MainWindow(QMainWindow):
         tool_group.addAction(self.action_select)
         tool_group.addAction(self.action_polygon)
         tool_group.addAction(self.action_circle)
+        tool_group.addAction(self.action_mesh)
 
         toolbar.addAction(self.action_select)
         toolbar.addAction(self.action_polygon)
         toolbar.addAction(self.action_circle)
+        toolbar.addAction(self.action_mesh)
 
         toolbar.addSeparator()
 
@@ -296,6 +303,7 @@ class MainWindow(QMainWindow):
         self.action_select.triggered.connect(lambda _checked=False: self._set_tool("select"))
         self.action_polygon.triggered.connect(lambda _checked=False: self._set_tool("polygon"))
         self.action_circle.triggered.connect(lambda _checked=False: self._set_tool("circle"))
+        self.action_mesh.triggered.connect(lambda _checked=False: self._set_tool("mesh"))
         self.action_projection.triggered.connect(lambda _checked=False: self._toggle_projection())
         self.zoom_slider.valueChanged.connect(self._on_zoom_changed)
         self.action_test_mode.toggled.connect(self._on_test_mode_toggled)
