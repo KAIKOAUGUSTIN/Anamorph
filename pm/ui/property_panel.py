@@ -173,12 +173,6 @@ class PropertyPanel(QWidget):
         points_layout.setContentsMargins(8, 8, 8, 8)
         points_layout.setSpacing(6)
 
-        self.circle_points_spin = ArrowSpinBox()
-        self.circle_points_spin.setRange(4, 32)
-        self.circle_points_spin.setSingleStep(2.0)
-        self.circle_points_spin.valueChanged.connect(self._on_circle_points_changed)
-        points_layout.addWidget(self._wrap_row("Circle Points", self.circle_points_spin))
-
         polygon_buttons = QHBoxLayout()
         self.add_vertex_btn = QPushButton("+ Vertex")
         self.remove_vertex_btn = QPushButton("- Vertex")
@@ -714,14 +708,13 @@ class PropertyPanel(QWidget):
 
     def _update_point_controls(self, shape: Shape) -> None:
         if isinstance(shape, CircleShape):
+            # Circles are edited through the four axis handles and the
+            # RX/RY boxes; there are no vertices to add or remove.
             self.points_group.setVisible(True)
-            self.circle_points_spin.setEnabled(True)
             self.add_vertex_btn.setEnabled(False)
             self.remove_vertex_btn.setEnabled(False)
-            self.circle_points_spin.setValue(int(getattr(shape, "control_points", 4)))
         elif isinstance(shape, PolygonShape):
             self.points_group.setVisible(True)
-            self.circle_points_spin.setEnabled(False)
             self.add_vertex_btn.setEnabled(True)
             self.remove_vertex_btn.setEnabled(True)
         else:
@@ -788,15 +781,6 @@ class PropertyPanel(QWidget):
         self._shape.ensure_edges()
         self._shape.edges[idx].percent = float(value) / 100.0
         self._commit("Edge Length")
-
-    def _on_circle_points_changed(self, value: float) -> None:
-        if self._updating or not isinstance(self._shape, CircleShape):
-            return
-        count = max(4, int(value))
-        if count % 2 != 0:
-            count += 1
-        self._shape.control_points = count
-        self._commit("Circle Points")
 
     def _on_add_vertex(self) -> None:
         if self._updating or not isinstance(self._shape, PolygonShape):
