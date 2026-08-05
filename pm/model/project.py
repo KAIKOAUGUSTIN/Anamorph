@@ -43,9 +43,17 @@ class Project(QObject):
         self.ui_state: Dict[str, Any] = {"last_projection_screen_id": None, "test_mode": False}
         self.path: Optional[str] = None
         self.name: str = "Untitled"
+        # Every mutation routes through touch(), so this stays honest without
+        # anyone having to remember to set it.
+        self.dirty: bool = False
 
     def touch(self) -> None:
+        self.dirty = True
         self.changed.emit()
+
+    def mark_saved(self) -> None:
+        """Call after the project has been written to or read from disk."""
+        self.dirty = False
 
     def add_shape(self, shape: Shape) -> None:
         self.shapes.append(shape)

@@ -22,7 +22,9 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
+from pm.model.commands import EditSession
 from pm.model.media import MediaRef
+from pm.model.project import Project
 from pm.model.shapes import CircleShape, EdgeVisibility, PolygonShape, Shape
 from pm.ui.widgets import ArrowSlider, ArrowSpinBox
 
@@ -61,7 +63,9 @@ class PropertyPanel(QWidget):
         self._shape: Optional[Shape] = None
         self._updating = False
         self._edge_rows: List[tuple] = []
-        self.setMinimumSize(0, 0)
+        self._project: Optional[Project] = None
+        self._session: Optional[EditSession] = None
+        self._coord_rows: List[QWidget] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -174,6 +178,22 @@ class PropertyPanel(QWidget):
         polygon_buttons.addWidget(self.add_vertex_btn)
         polygon_buttons.addWidget(self.remove_vertex_btn)
         points_layout.addLayout(polygon_buttons)
+
+        # Typed coordinates. Dragging is not reproducible: rebuilding a
+        # mapping in another venue, or matching a wall measured with a tape,
+        # needs numbers.
+        self.coords_layout = QVBoxLayout()
+        self.coords_layout.setContentsMargins(0, 6, 0, 0)
+        self.coords_layout.setSpacing(4)
+        points_layout.addLayout(self.coords_layout)
+
+        # The panel lives in a scroll area with widgetResizable(True), which
+        # squeezes children that are willing to shrink. Groups that grow with
+        # the vertex count must refuse, so the scroll bar appears instead of
+        # the rows collapsing into slivers.
+        for group in (self.edges_group, self.points_group):
+            group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+
         layout.addWidget(self.points_group)
 
         # Media section
@@ -356,6 +376,11 @@ class PropertyPanel(QWidget):
 
     def set_shape(self, shape: Optional[Shape]) -> None:
         self._shape = shape
+        # Re-arm against the new shape; any half-open session belonged to the
+        # previous one and must not be attributed to this edit.
+        if self._session is not None:
+            self._session.cancel()
+            self._session.begin(shape)
         self._updating = True
         if not shape:
             self.setEnabled(False)
@@ -372,6 +397,7 @@ class PropertyPanel(QWidget):
         self.opacity_value.setText(f"{int(shape.opacity * 100)}%")
         self._populate_edges(shape)
         self._update_point_controls(shape)
+        self._populate_coords(shape)
         self._update_media(shape.media)
         self._select_fit_mode(shape.media.fit_mode if shape.media else "stretch")
         self._update_corner_pin_controls()
@@ -389,11 +415,30 @@ class PropertyPanel(QWidget):
         self.strobe_hz.setValue(shape.effects.strobe.hz)
         self._updating = False
 
+    def set_undo_context(self, project: Project, stack) -> None:
+        self._project = project
+        self._session = EditSession(stack)
+        self._session.begin(self._shape)
+
+    def _commit(self, text: str) -> None:
+        """Record the edit as one undo step, then re-arm for the next one.
+
+        Sliders fire continuously; ShapeEditCommand merges same-labelled edits
+        to the same shape inside a short window, so a slider drag collapses
+        into a single entry.
+        """
+        if self._session is not None and self._project is not None:
+            self._session.commit(self._project, text)
+            self._session.begin(self._shape)
+        self.shape_changed.emit()
+
     def _populate_edges(self, shape: Shape) -> None:
         for i in reversed(range(self.edges_layout.count())):
             item = self.edges_layout.takeAt(i)
-            if item and item.widget():
-                item.widget().deleteLater()
+            widget = item.widget() if item else None
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
         self._edge_rows.clear()
         if not isinstance(shape, PolygonShape):
             self.edges_group.setVisible(False)
@@ -419,6 +464,139 @@ class PropertyPanel(QWidget):
             row_layout.addWidget(slider, 1)
             self.edges_layout.addWidget(row)
             self._edge_rows.append((checkbox, slider))
+        self.updateGeometry()
+
+    def _clear_coord_rows(self) -> None:
+        for i in reversed(range(self.coords_layout.count())):
+            item = self.coords_layout.takeAt(i)
+            widget = item.widget() if item else None
+            if widget is not None:
+                # Unparent now, not just deleteLater: until the event loop
+                # gets around to the deletion the widget is still a visible
+                # child, and having left the layout it keeps its old geometry
+                # and paints on top of whatever moved into that space.
+                widget.setParent(None)
+                widget.deleteLater()
+        self._coord_rows.clear()
+
+    def _coord_spin(self, value: float) -> ArrowSpinBox:
+        spin = ArrowSpinBox()
+        # Room for surfaces parked well outside the canvas while being built.
+        spin.setRange(-99999.0, 99999.0)
+        spin.setDecimals(1)
+        spin.setSingleStep(1.0)
+        spin.setValue(float(value))
+        spin.setFixedWidth(76)
+        # Without an explicit height these rows get squeezed to a few pixels
+        # when the Points group runs short of vertical space.
+        spin.setFixedHeight(24)
+        return spin
+
+    def _populate_coords(self, shape: Shape) -> None:
+        """One editable X/Y row per vertex, or centre/radius for a circle."""
+        self._clear_coord_rows()
+
+        if isinstance(shape, PolygonShape):
+            for idx, (x, y) in enumerate(shape.points):
+                row = QWidget()
+                row.setFixedHeight(28)
+                row_layout = QHBoxLayout(row)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(6)
+                label = QLabel(f"V{idx + 1}")
+                label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
+                label.setFixedWidth(28)
+                x_spin = self._coord_spin(x)
+                y_spin = self._coord_spin(y)
+                x_spin.valueChanged.connect(lambda v, i=idx: self._on_vertex_coord(i, 0, v))
+                y_spin.valueChanged.connect(lambda v, i=idx: self._on_vertex_coord(i, 1, v))
+                row_layout.addWidget(label)
+                row_layout.addWidget(x_spin)
+                row_layout.addWidget(y_spin)
+                row_layout.addStretch(1)
+                self.coords_layout.addWidget(row)
+                self._coord_rows.append(row)
+
+        elif isinstance(shape, CircleShape):
+            for label_text, value, setter in (
+                ("X", shape.center[0], "center_x"),
+                ("Y", shape.center[1], "center_y"),
+                ("RX", shape.radius_x, "radius_x"),
+                ("RY", shape.radius_y, "radius_y"),
+            ):
+                spin = self._coord_spin(value)
+                spin.valueChanged.connect(lambda v, f=setter: self._on_circle_geometry(f, v))
+                row = self._wrap_row(label_text, spin)
+                self.coords_layout.addWidget(row)
+                self._coord_rows.append(row)
+
+        # These rows appear and disappear with the vertex count, and the
+        # enclosing scroll area only re-reads the size hint when told to.
+        # Without this it keeps the height from before the rows existed and
+        # clips them.
+        self.updateGeometry()
+
+    def refresh_geometry(self) -> None:
+        """Pull coordinates back from the model after a canvas-side edit.
+
+        Without this the spin boxes keep showing where a vertex used to be
+        the moment the user drags it.
+        """
+        shape = self._shape
+        if shape is None:
+            return
+
+        expected = len(shape.points) if isinstance(shape, PolygonShape) else 4
+        if len(self._coord_rows) != expected:
+            self._updating = True
+            self._populate_coords(shape)
+            self._updating = False
+            return
+
+        self._updating = True
+        try:
+            if isinstance(shape, PolygonShape):
+                for row, (x, y) in zip(self._coord_rows, shape.points):
+                    spins = row.findChildren(ArrowSpinBox)
+                    if len(spins) == 2:
+                        spins[0].setValue(float(x))
+                        spins[1].setValue(float(y))
+            elif isinstance(shape, CircleShape):
+                values = (shape.center[0], shape.center[1], shape.radius_x, shape.radius_y)
+                for row, value in zip(self._coord_rows, values):
+                    spins = row.findChildren(ArrowSpinBox)
+                    if spins:
+                        spins[0].setValue(float(value))
+        finally:
+            self._updating = False
+
+    def _on_vertex_coord(self, index: int, axis: int, value: float) -> None:
+        if self._updating or not isinstance(self._shape, PolygonShape):
+            return
+        if index >= len(self._shape.points):
+            return
+        point = list(self._shape.points[index])
+        if point[axis] == value:
+            return
+        point[axis] = float(value)
+        points = list(self._shape.points)
+        points[index] = (point[0], point[1])
+        self._shape.points = points
+        self._commit("Set Vertex")
+
+    def _on_circle_geometry(self, field: str, value: float) -> None:
+        if self._updating or not isinstance(self._shape, CircleShape):
+            return
+        cx, cy = self._shape.center
+        if field == "center_x":
+            self._shape.center = (float(value), cy)
+        elif field == "center_y":
+            self._shape.center = (cx, float(value))
+        elif field == "radius_x":
+            self._shape.radius_x = max(1.0, float(value))
+        elif field == "radius_y":
+            self._shape.radius_y = max(1.0, float(value))
+        self._commit("Set Circle Geometry")
 
     def _update_point_controls(self, shape: Shape) -> None:
         if isinstance(shape, CircleShape):
@@ -462,40 +640,40 @@ class PropertyPanel(QWidget):
         else:
             self._shape.stroke_color = rgba
             self._apply_button_color(self.stroke_button, rgba)
-        self.shape_changed.emit()
+        self._commit("Change Colour")
 
     def _on_name_changed(self) -> None:
         if self._updating or not self._shape:
             return
         self._shape.name = self.name_edit.text().strip() or self._shape.name
-        self.shape_changed.emit()
+        self._commit("Rename Shape")
 
     def _on_stroke_width_changed(self, value: float) -> None:
         if self._updating or not self._shape:
             return
         self._shape.stroke_width = float(value)
-        self.shape_changed.emit()
+        self._commit("Stroke Width")
 
     def _on_opacity_changed(self, value: int) -> None:
         if self._updating or not self._shape:
             return
         self._shape.opacity = float(value) / 100.0
         self.opacity_value.setText(f"{value}%")
-        self.shape_changed.emit()
+        self._commit("Opacity")
 
     def _on_edge_visible(self, idx: int, state: int) -> None:
         if self._updating or not isinstance(self._shape, PolygonShape):
             return
         self._shape.ensure_edges()
         self._shape.edges[idx].visible = state == Qt.Checked.value
-        self.shape_changed.emit()
+        self._commit("Edge Visibility")
 
     def _on_edge_percent(self, idx: int, value: float) -> None:
         if self._updating or not isinstance(self._shape, PolygonShape):
             return
         self._shape.ensure_edges()
         self._shape.edges[idx].percent = float(value) / 100.0
-        self.shape_changed.emit()
+        self._commit("Edge Length")
 
     def _on_circle_points_changed(self, value: float) -> None:
         if self._updating or not isinstance(self._shape, CircleShape):
@@ -504,7 +682,7 @@ class PropertyPanel(QWidget):
         if count % 2 != 0:
             count += 1
         self._shape.control_points = count
-        self.shape_changed.emit()
+        self._commit("Circle Points")
 
     def _on_add_vertex(self) -> None:
         if self._updating or not isinstance(self._shape, PolygonShape):
@@ -538,7 +716,8 @@ class PropertyPanel(QWidget):
         self._shape.edges = edges[: len(points)]
         self._populate_edges(self._shape)
         self._update_corner_pin_controls()
-        self.shape_changed.emit()
+        self._populate_coords(self._shape)
+        self._commit("Add Vertex")
 
     def _on_remove_vertex(self) -> None:
         if self._updating or not isinstance(self._shape, PolygonShape):
@@ -553,7 +732,8 @@ class PropertyPanel(QWidget):
             self._shape.edges = self._shape.edges[:len(points)]
         self._populate_edges(self._shape)
         self._update_corner_pin_controls()
-        self.shape_changed.emit()
+        self._populate_coords(self._shape)
+        self._commit("Remove Vertex")
 
     def _pick_media(self, kind: str) -> None:
         if not self._shape:
@@ -581,7 +761,7 @@ class PropertyPanel(QWidget):
 
         self._update_media(self._shape.media)
         self._update_corner_pin_controls()
-        self.shape_changed.emit()
+        self._commit("Load Media")
 
     def _clear_media(self) -> None:
         if not self._shape:
@@ -592,7 +772,7 @@ class PropertyPanel(QWidget):
         self._select_fit_mode(self._shape.media.fit_mode)
         self._updating = False
         self._update_corner_pin_controls()
-        self.shape_changed.emit()
+        self._commit("Clear Media")
 
     def _update_media(self, media: MediaRef) -> None:
         if media and media.path:
@@ -609,7 +789,7 @@ class PropertyPanel(QWidget):
             self._shape.media = MediaRef()
         self._shape.media.fit_mode = self.fit_mode.currentData() or "stretch"
         self._update_corner_pin_controls()
-        self.shape_changed.emit()
+        self._commit("Fit Mode")
 
     def _select_fit_mode(self, value: str) -> None:
         index = self.fit_mode.findData(value)
@@ -640,7 +820,8 @@ class PropertyPanel(QWidget):
         miny, maxy = min(ys), max(ys)
         self._shape.points = [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]
         self._shape.ensure_edges()
-        self.shape_changed.emit()
+        self._populate_coords(self._shape)
+        self._commit("Reset Corners")
 
     def _on_transform_changed(self) -> None:
         if self._updating or not self._shape:
@@ -650,7 +831,7 @@ class PropertyPanel(QWidget):
         self._shape.media.transform.offset_x = self.offset_x.value()
         self._shape.media.transform.offset_y = self.offset_y.value()
         self._shape.media.transform.rotation = self.rotation.value()
-        self.shape_changed.emit()
+        self._commit("Media Transform")
 
     def _on_effects_changed(self) -> None:
         if self._updating or not self._shape:
@@ -663,4 +844,4 @@ class PropertyPanel(QWidget):
         self._shape.effects.pulse.speed = self.pulse_speed.value()
         self._shape.effects.strobe.enabled = self.strobe_enable.isChecked()
         self._shape.effects.strobe.hz = self.strobe_hz.value()
-        self.shape_changed.emit()
+        self._commit("Effects")
