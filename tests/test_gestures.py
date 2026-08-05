@@ -162,6 +162,102 @@ def test_selecting_a_shape_always_shows_its_vertices(canvas):
     assert all(h.isVisible() for h in item.handles)
 
 
+# --- the bounding box is what makes the gestures findable ----------------
+
+def test_selecting_a_shape_shows_scale_and_rotate_grips(canvas):
+    shape = canvas.project.shapes[0]
+    canvas.select_shape(shape.id)
+
+    modes = [h.mode for h in canvas._transform_handles]
+    assert modes.count("scale") == 4
+    assert modes.count("rotate") == 1
+
+
+def test_grips_sit_on_the_bounding_box(canvas):
+    shape = canvas.project.shapes[0]
+    canvas.select_shape(shape.id)
+
+    corners = {(h.pos().x(), h.pos().y()) for h in canvas._transform_handles if h.mode == "scale"}
+    assert corners == {(100.0, 100.0), (200.0, 100.0), (200.0, 200.0), (100.0, 200.0)}
+
+    rotate = next(h for h in canvas._transform_handles if h.mode == "rotate")
+    assert rotate.pos().x() == pytest.approx(150.0)
+    assert rotate.pos().y() < 100.0, "the rotate grip floats above the box"
+
+
+def test_grips_follow_the_shape(canvas):
+    shape = canvas.project.shapes[0]
+    canvas.select_shape(shape.id)
+    _drag_body(canvas, (200.0, 150.0))  # move right by 50
+
+    corners = {h.pos().x() for h in canvas._transform_handles if h.mode == "scale"}
+    assert corners == {150.0, 250.0}
+
+
+def test_grips_disappear_with_the_selection(canvas):
+    shape = canvas.project.shapes[0]
+    canvas.select_shape(shape.id)
+    assert canvas._transform_handles
+
+    canvas.select_shape(None)
+    assert canvas._transform_handles == []
+
+
+def test_a_locked_shape_gets_no_grips(canvas):
+    shape = canvas.project.shapes[0]
+    shape.locked = True
+    canvas.select_shape(shape.id)
+
+    assert canvas._transform_handles == []
+
+
+def test_a_grip_forces_its_own_gesture_regardless_of_modifiers(canvas):
+    """The grip says what it does; the modifiers are for dragging the body."""
+    shape = canvas.project.shapes[0]
+    canvas.select_shape(shape.id)
+    item = canvas.items_by_id[shape.id]
+
+    canvas._begin_body_drag(item, QPointF(200.0, 150.0), Qt.NoModifier, mode="scale")
+    canvas._update_body_drag(QPointF(250.0, 150.0), Qt.NoModifier)
+
+    cx, cy = CENTRE
+    for (ox, oy), (nx, ny) in zip(QUAD, shape.points):
+        assert nx - cx == pytest.approx((ox - cx) * 2.0)
+
+
+def test_releasing_a_grip_commits_one_undo_step(canvas):
+    shape = canvas.project.shapes[0]
+    canvas.select_shape(shape.id)
+    item = canvas.items_by_id[shape.id]
+
+    canvas._begin_edit_for(item)
+    canvas._begin_body_drag(item, QPointF(200.0, 150.0), Qt.NoModifier, mode="scale")
+    for x in (220.0, 240.0, 250.0):
+        canvas._update_body_drag(QPointF(x, 150.0), Qt.NoModifier)
+    canvas._release_transform_handle()
+
+    assert canvas.undo_stack.count() == 1
+    assert canvas.undo_stack.command(0).text() == "Scale Shape"
+
+    canvas.undo_stack.undo()
+    assert canvas.project.shapes[0].points == QUAD
+
+
+def test_grips_track_a_circle_by_its_radii(qapp):
+    from pm.ui.canvas_editor import CanvasEditor
+
+    project = Project()
+    circle = circle_from_center((150.0, 150.0), 50.0)
+    circle.radius_x, circle.radius_y = 80.0, 20.0
+    project.add_shape(circle)
+    canvas = CanvasEditor(project)
+    canvas.set_undo_stack(QUndoStack())
+    canvas.select_shape(circle.id)
+
+    corners = {(h.pos().x(), h.pos().y()) for h in canvas._transform_handles if h.mode == "scale"}
+    assert corners == {(70.0, 130.0), (230.0, 130.0), (230.0, 170.0), (70.0, 170.0)}
+
+
 # --- duplicate -----------------------------------------------------------
 
 def test_duplicate_offsets_and_renames():
