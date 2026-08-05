@@ -42,6 +42,7 @@ from pm.model.project import Project
 from pm.model.shapes import CircleShape, PolygonShape, Shape
 from pm.render.homography import canvas_to_uv_matrix, corner_uv_assignment
 from pm.render.mesh import triangulate_circle, triangulate_polygon
+from pm.render.test_pattern import GRID, render_test_pattern
 from pm.render.shaders import (
     FRAGMENT_SHADER_SOLID, FRAGMENT_SHADER_STROKE, FRAGMENT_SHADER_TEXTURE,
     VERTEX_SHADER,
@@ -75,6 +76,8 @@ class GLRenderer(QOpenGLWidget):
         self._image_cache: Dict[str, Tuple[int, Tuple[int, int]]] = {}
         self._video_players: Dict[str, VideoPlayer] = {}
         self._video_textures: Dict[str, Tuple[int, Tuple[int, int]]] = {}
+        self._test_pattern_texture_id: Optional[int] = None
+        self._test_pattern_key: Optional[Tuple] = None
 
         # Track initialization
         self._gl_initialized = False
@@ -98,6 +101,10 @@ class GLRenderer(QOpenGLWidget):
             glDeleteTextures(1, [tex_id])
         for tex_id, _ in self._video_textures.values():
             glDeleteTextures(1, [tex_id])
+        if self._test_pattern_texture_id:
+            glDeleteTextures(1, [self._test_pattern_texture_id])
+            self._test_pattern_texture_id = None
+            self._test_pattern_key = None
         self._image_cache.clear()
         self._video_textures.clear()
 
@@ -188,6 +195,13 @@ class GLRenderer(QOpenGLWidget):
 
             now = time.perf_counter() - self._start_time
 
+            # Calibration replaces the scene rather than overlaying it: the
+            # point is to align the projector against known geometry, with
+            # nothing else on screen to confuse the eye.
+            if self.project.ui_state.get("test_mode"):
+                self._draw_test_pattern(canvas_w, canvas_h)
+                return
+
             # Render shapes
             for shape in self.project.shapes:
                 if not shape.visible:
@@ -226,12 +240,71 @@ class GLRenderer(QOpenGLWidget):
             uvs = self._compute_uvs_from_size(points, tex_size, shape.media)
             uv_matrix = self._warp_matrix(shape, points)
             self._draw_textured_shape(
-                points, uvs, indices, tex_id, opacity, shape, now, canvas_w, canvas_h, uv_matrix
+                points, uvs, indices, tex_id, opacity, shape, now,
+                canvas_w, canvas_h, uv_matrix, tex_size,
             )
         else:
             # Solid color fill
             fill = shape.fill_color
             self._draw_solid_shape(points, indices, fill, opacity, shape, now, canvas_w, canvas_h)
+
+    def _test_pattern_texture(self, canvas_w: float, canvas_h: float) -> Optional[int]:
+        """Texture for the current calibration pattern, regenerated only when
+        the resolution, pattern or screen label actually changes."""
+        kind = self.project.ui_state.get("test_pattern", GRID)
+        label = self.project.name or ""
+        key = (int(canvas_w), int(canvas_h), kind, label)
+        if self._test_pattern_key == key and self._test_pattern_texture_id:
+            return self._test_pattern_texture_id
+
+        image = render_test_pattern(int(canvas_w), int(canvas_h), kind, label)
+        if self._test_pattern_texture_id:
+            glDeleteTextures(1, [self._test_pattern_texture_id])
+            self._test_pattern_texture_id = None
+
+        tex_id = self._create_texture_from_qimage(image)
+        if not tex_id:
+            return None
+        self._test_pattern_texture_id = tex_id
+        self._test_pattern_key = key
+        return tex_id
+
+    def _draw_test_pattern(self, canvas_w: float, canvas_h: float) -> None:
+        tex_id = self._test_pattern_texture(canvas_w, canvas_h)
+        if not tex_id:
+            return
+
+        glUseProgram(self._program_texture)
+
+        vertices = [
+            0.0, 0.0, 0.0, 0.0,
+            canvas_w, 0.0, 1.0, 0.0,
+            canvas_w, canvas_h, 1.0, 1.0,
+            0.0, canvas_h, 0.0, 1.0,
+        ]
+        indices = [0, 1, 2, 0, 2, 3]
+
+        glBindBuffer(GL_ARRAY_BUFFER, self._vbo)
+        glBufferData(GL_ARRAY_BUFFER, len(vertices) * 4, np.array(vertices, dtype=np.float32), GL_DYNAMIC_DRAW)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self._ebo)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, len(indices) * 4, np.array(indices, dtype=np.uint32), GL_DYNAMIC_DRAW)
+
+        # Every uniform the texture program reads has to be set explicitly:
+        # whatever a previous frame left behind is still bound.
+        glUniform2f(glGetUniformLocation(self._program_texture, "u_canvas_size"), canvas_w, canvas_h)
+        glUniform1f(glGetUniformLocation(self._program_texture, "u_opacity"), 1.0)
+        glUniform1f(glGetUniformLocation(self._program_texture, "u_time"), 0.0)
+        glUniform3f(glGetUniformLocation(self._program_texture, "u_rgb_shift"), 0.0, 0.0, 0.0)
+        glUniform1i(glGetUniformLocation(self._program_texture, "u_uv_projective"), 0)
+        glUniform2f(glGetUniformLocation(self._program_texture, "u_media_offset"), 0.0, 0.0)
+        glUniform1f(glGetUniformLocation(self._program_texture, "u_media_rotation"), 0.0)
+
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, tex_id)
+        glUniform1i(glGetUniformLocation(self._program_texture, "u_texture"), 0)
+
+        glBindVertexArray(self._vao)
+        glDrawElements(GL_TRIANGLES, len(indices), GL_UNSIGNED_INT, None)
 
     def _warp_matrix(self, shape: Shape, points: List[Tuple[float, float]]) -> Optional[np.ndarray]:
         """Homography for a corner-pinned surface, or None for every other case."""
@@ -253,6 +326,7 @@ class GLRenderer(QOpenGLWidget):
         canvas_w: float,
         canvas_h: float,
         uv_matrix: Optional[np.ndarray] = None,
+        media_size: Tuple[int, int] = (1, 1),
     ) -> None:
         """Draw a shape with texture."""
         glUseProgram(self._program_texture)
@@ -300,6 +374,18 @@ class GLRenderer(QOpenGLWidget):
             glUniformMatrix3fv(loc, 1, GL_TRUE, uv_matrix.astype(np.float32))
         else:
             glUniform1i(loc, 0)
+
+        # Media pan/rotate. The panel edits offsets in source pixels, which
+        # only become UV units once the media's own size is known.
+        transform = shape.media.transform
+        loc = glGetUniformLocation(self._program_texture, "u_media_offset")
+        glUniform2f(
+            loc,
+            transform.offset_x / max(media_size[0], 1),
+            transform.offset_y / max(media_size[1], 1),
+        )
+        loc = glGetUniformLocation(self._program_texture, "u_media_rotation")
+        glUniform1f(loc, math.radians(transform.rotation))
 
         # Bind texture
         glActiveTexture(GL_TEXTURE0)

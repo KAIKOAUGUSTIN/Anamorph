@@ -14,6 +14,7 @@ from PySide6.QtGui import (
     QPolygonF,
     QTransform,
 )
+from PySide6.QtGui import QGuiApplication, QUndoStack
 from PySide6.QtWidgets import QStyle
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
@@ -24,7 +25,9 @@ from PySide6.QtWidgets import (
 )
 
 from pm.media.image_cache import get_qimage
+from pm.model.commands import AddShapeCommand, EditSession
 from pm.model.project import Project
+from pm.model.snapping import find_snap, shape_edges, shape_vertices, snap_to_grid
 from pm.model.shapes import CircleShape, EdgeVisibility, PolygonShape, Shape, circle_from_center, polygon_from_points
 from pm.render.homography import corner_uv_assignment
 
@@ -35,6 +38,9 @@ class CanvasScene(QGraphicsScene):
         self.project = project
         self.grid_size = 20
         self.workspace_background = QColor(10, 10, 12)
+        # Set while a drag is latched onto another surface; drawn last so the
+        # user can see the magnet engage under the cursor.
+        self.snap_marker: Optional[QPointF] = None
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
         super().drawBackground(painter, rect)
@@ -79,6 +85,29 @@ class CanvasScene(QGraphicsScene):
         # Bottom-right
         painter.drawLine(canvas_rect.right() - corner_size, canvas_rect.bottom(), canvas_rect.right(), canvas_rect.bottom())
         painter.drawLine(canvas_rect.right(), canvas_rect.bottom() - corner_size, canvas_rect.right(), canvas_rect.bottom())
+
+    def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
+        super().drawForeground(painter, rect)
+        if self.snap_marker is None:
+            return
+        # Sized in scene units against the current zoom so the ring stays the
+        # same size on screen however far in the user is.
+        scale = painter.worldTransform().m11() or 1.0
+        radius = 9.0 / scale
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(255, 176, 46), 2.0 / scale))
+        painter.drawEllipse(self.snap_marker, radius, radius)
+        painter.drawLine(
+            QPointF(self.snap_marker.x() - radius * 1.7, self.snap_marker.y()),
+            QPointF(self.snap_marker.x() + radius * 1.7, self.snap_marker.y()),
+        )
+        painter.drawLine(
+            QPointF(self.snap_marker.x(), self.snap_marker.y() - radius * 1.7),
+            QPointF(self.snap_marker.x(), self.snap_marker.y() + radius * 1.7),
+        )
+        painter.restore()
 
 
 def _paint_media(painter: QPainter, shape: Shape, path: QPainterPath) -> bool:
@@ -363,6 +392,10 @@ class CanvasEditor(QGraphicsView):
     zoom_changed = Signal(float)
     edit_mode_changed = Signal(str)
 
+    # Magnet radius in screen pixels, divided by the zoom before use so it
+    # feels constant to the hand rather than to the scene.
+    SNAP_THRESHOLD_PX = 12.0
+
     def __init__(self, project: Project, parent=None) -> None:
         super().__init__(parent)
         self.project = project
@@ -385,10 +418,137 @@ class CanvasEditor(QGraphicsView):
         self.tool = "select"
         self._items_movable = False
 
+        self.undo_stack: Optional[QUndoStack] = None
+        self._session: Optional[EditSession] = None
+        self.snap_enabled = True
+        # (item, vertex index) of the last handle pressed, so arrow keys nudge
+        # that corner instead of the whole surface.
+        self._active_vertex: Optional[Tuple[object, int]] = None
+        self.setFocusPolicy(Qt.StrongFocus)
+
         self.items_by_id: Dict[str, object] = {}
         self.scene.selectionChanged.connect(self._on_selection_changed)
+        self._connected_project: Optional[Project] = project
         self.project.changed.connect(self._sync_items)
         self._sync_items()
+
+    def set_project(self, project: Project) -> None:
+        """Point the editor at another project, moving the signal with it.
+
+        The view owns this connection so it exists exactly once; having the
+        window wire it up as well meant every repaint rebuilt the scene twice.
+        """
+        if self._connected_project is project:
+            return
+        if self._connected_project is not None:
+            self._connected_project.changed.disconnect(self._sync_items)
+
+        self.project = project
+        self.scene.project = project
+        self._connected_project = project
+        project.changed.connect(self._sync_items)
+
+        self.items_by_id.clear()
+        self.scene.clear()
+        self._active_vertex = None
+        if self._session is not None:
+            self._session.cancel()
+        self._sync_items()
+
+    def set_snap_enabled(self, enabled: bool) -> None:
+        self.snap_enabled = bool(enabled)
+        if not self.snap_enabled:
+            self._clear_snap_marker()
+
+    def _clear_snap_marker(self) -> None:
+        if self.scene.snap_marker is not None:
+            self.scene.snap_marker = None
+            self.scene.update()
+
+    def _snap_candidates(self, exclude_shape_id: Optional[str]):
+        """Geometry from the *other* visible surfaces.
+
+        The dragged shape is excluded on purpose: a vertex is always within
+        zero pixels of its own adjacent edges, so including them would pin it
+        in place, and snapping a corner onto another corner of the same quad
+        just collapses it.
+        """
+        vertices: List[Tuple[float, float]] = []
+        edges: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+        for shape in self.project.shapes:
+            if shape.id == exclude_shape_id or not shape.visible:
+                continue
+            if isinstance(shape, PolygonShape):
+                vertices.extend(shape_vertices(shape.points))
+                edges.extend(shape_edges(shape.points))
+            elif isinstance(shape, CircleShape):
+                # The four anchors are the useful alignment points; the curve
+                # itself has no segments to snap an edge against.
+                vertices.extend(shape_vertices(shape.anchors))
+        return vertices, edges
+
+    def _snap_vertex(self, owner, pos: QPointF) -> QPointF:
+        """snap_func for vertex handles. Alt suppresses it for one drag."""
+        if not self.snap_enabled:
+            return pos
+        if QGuiApplication.keyboardModifiers() & Qt.AltModifier:
+            self._clear_snap_marker()
+            return pos
+
+        shape_id = getattr(getattr(owner, "model", None), "id", None)
+        vertices, edges = self._snap_candidates(shape_id)
+        threshold = self.SNAP_THRESHOLD_PX / max(self._zoom, 1e-6)
+
+        result = find_snap(
+            (pos.x(), pos.y()),
+            vertices,
+            edges,
+            threshold,
+            grid_size=self.scene.grid_size,
+        )
+        if result is None:
+            self._clear_snap_marker()
+            return pos
+
+        snapped = QPointF(result.point[0], result.point[1])
+        # Only geometry snaps get a marker - flagging every grid landing
+        # would leave the ring blinking across the whole canvas.
+        marker = snapped if result.is_magnetic else None
+        if self.scene.snap_marker != marker:
+            self.scene.snap_marker = marker
+            self.scene.update()
+        return snapped
+
+    def set_undo_stack(self, stack: QUndoStack) -> None:
+        self.undo_stack = stack
+        self._session = EditSession(stack)
+
+    def _begin_edit_for(self, hit_item) -> None:
+        """Snapshot the shape under the cursor, making the drag one undo step.
+
+        Resolved from the pressed item rather than the selection, because Qt
+        updates the selection after the press event we are handling.
+        """
+        if self._session is None:
+            return
+
+        model = None
+        if isinstance(hit_item, VertexHandle):
+            model = getattr(hit_item.owner, "model", None)
+        elif isinstance(hit_item, (PolygonItem, CircleItem)):
+            model = hit_item.model
+        elif hit_item is not None and isinstance(hit_item.parentItem(), (PolygonItem, CircleItem)):
+            model = hit_item.parentItem().model
+        else:
+            model = getattr(self._current_selected_item(), "model", None)
+
+        self._session.begin(model)
+
+    def _commit_edit(self) -> None:
+        if self._session is None or not self._session.active:
+            return
+        labels = {"points": "Move Points", "scale": "Scale Shape", "rotate": "Rotate Shape"}
+        self._session.commit(self.project, labels.get(self._edit_mode, "Edit Shape"))
 
     def set_tool(self, tool: str) -> None:
         self.tool = tool
@@ -513,7 +673,10 @@ class CanvasEditor(QGraphicsView):
         self._clear_handles(item)
         item.handles.clear()
         for idx, point in enumerate(item.model.points):
-            handle = VertexHandle(item, idx, self._on_handle_moved, None)
+            # VertexHandle calls snap_func(pos), so the owner is bound here.
+            handle = VertexHandle(
+                item, idx, self._on_handle_moved, lambda p, o=item: self._snap_vertex(o, p)
+            )
             handle.setParentItem(item)
             handle.set_pos_silent(point[0], point[1])
             handle.setVisible(False)
@@ -554,7 +717,7 @@ class CanvasEditor(QGraphicsView):
                 item,
                 idx,
                 self._on_circle_handle_moved,
-                None,
+                lambda p, o=item: self._snap_vertex(o, p),
                 self._on_circle_handle_pressed,
                 self._on_circle_handle_released,
             )
@@ -938,6 +1101,7 @@ class CanvasEditor(QGraphicsView):
             if event.modifiers() & Qt.ShiftModifier:
                 self._set_items_movable(True)
                 self.setDragMode(QGraphicsView.NoDrag)
+                self._begin_edit_for(hit_item)
                 super().mousePressEvent(event)
                 return
             if isinstance(hit_item, VertexHandle) or \
@@ -946,6 +1110,12 @@ class CanvasEditor(QGraphicsView):
             ):
                 self._set_items_movable(False)
                 self.setDragMode(QGraphicsView.NoDrag)
+                # Snapshot before Qt starts delivering move events.
+                self._begin_edit_for(hit_item)
+                if isinstance(hit_item, VertexHandle):
+                    self._active_vertex = (hit_item.owner, hit_item.index)
+                else:
+                    self._active_vertex = None
             else:
                 self._set_items_movable(False)
                 self._panning = True
@@ -957,7 +1127,11 @@ class CanvasEditor(QGraphicsView):
                 shape = self._create_default_polygon(scene_pos, 120.0, "Polígono")
             else:
                 shape = circle_from_center((scene_pos.x(), scene_pos.y()), 60.0, name="Círculo")
-            self.project.add_shape(shape)
+            if self.undo_stack is not None:
+                label = "Add Polygon" if self.tool == "polygon" else "Add Circle"
+                self.undo_stack.push(AddShapeCommand(self.project, shape, label))
+            else:
+                self.project.add_shape(shape)
             self._sync_items()
             self.select_shape(shape.id)
             self.set_tool("select")
@@ -980,8 +1154,15 @@ class CanvasEditor(QGraphicsView):
         if self.tool == "select" and self._edit_mode == "points":
             scene_pos = self._snap_point(self.mapToScene(event.position().toPoint()))
             item = self._polygon_item_at(event.position().toPoint())
-            if item and self._insert_vertex(item, scene_pos):
-                return
+            if item:
+                if self._session is not None:
+                    self._session.begin(item.model)
+                if self._insert_vertex(item, scene_pos):
+                    if self._session is not None:
+                        self._session.commit(self.project, "Insert Vertex")
+                    return
+                if self._session is not None:
+                    self._session.cancel()
         super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
@@ -995,12 +1176,73 @@ class CanvasEditor(QGraphicsView):
             self._scale_state = {}
             self._rotate_state = {}
             self._circle_drag_state = {}
+            self._clear_snap_marker()
+            self._commit_edit()
         super().mouseReleaseEvent(event)
+
+    NUDGE_STEP = 1.0
+    NUDGE_STEP_LARGE = 10.0
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Escape:
             return
+
+        deltas = {
+            Qt.Key_Left: (-1.0, 0.0),
+            Qt.Key_Right: (1.0, 0.0),
+            Qt.Key_Up: (0.0, -1.0),
+            Qt.Key_Down: (0.0, 1.0),
+        }
+        direction = deltas.get(event.key())
+        if direction is not None:
+            step = self.NUDGE_STEP_LARGE if event.modifiers() & Qt.ShiftModifier else self.NUDGE_STEP
+            if self._nudge(direction[0] * step, direction[1] * step):
+                event.accept()
+                return
+
         super().keyPressEvent(event)
+
+    def _nudge(self, dx: float, dy: float) -> bool:
+        """Move the active vertex, or the whole shape if no vertex is armed.
+
+        Aligning a projection is sub-pixel work; a mouse cannot do it. Held
+        arrow keys collapse into one undo entry via the command merge window.
+        """
+        item = self._current_selected_item()
+        if item is None or item.model.locked:
+            return False
+
+        if self._session is not None:
+            self._session.begin(item.model)
+
+        vertex_index = None
+        if self._active_vertex and self._active_vertex[0] is item:
+            vertex_index = self._active_vertex[1]
+
+        shape = item.model
+        if isinstance(shape, PolygonShape):
+            points = list(shape.points)
+            if vertex_index is not None and vertex_index < len(points):
+                x, y = points[vertex_index]
+                points[vertex_index] = (x + dx, y + dy)
+                label = "Nudge Vertex"
+            else:
+                points = [(x + dx, y + dy) for x, y in points]
+                label = "Nudge Shape"
+            shape.points = points
+        elif isinstance(shape, CircleShape):
+            shape.center = (shape.center[0] + dx, shape.center[1] + dy)
+            shape.anchors = [(x + dx, y + dy) for x, y in shape.anchors]
+            label = "Nudge Shape"
+        else:
+            if self._session is not None:
+                self._session.cancel()
+            return False
+
+        self.project.touch()
+        if self._session is not None:
+            self._session.commit(self.project, label)
+        return True
 
     def _create_default_polygon(self, center: QPointF, size: float, name: str) -> PolygonShape:
         half = size / 2.0
@@ -1065,6 +1307,10 @@ class CanvasEditor(QGraphicsView):
             if isinstance(item, (PolygonItem, CircleItem)):
                 item.set_handles_visible(False)
         selected = self.scene.selectedItems()
+        # An armed vertex only makes sense while its own shape stays selected.
+        if self._active_vertex is not None:
+            if not selected or selected[0] is not self._active_vertex[0]:
+                self._active_vertex = None
         if selected:
             item = selected[0]
             if isinstance(item, (PolygonItem, CircleItem)):
