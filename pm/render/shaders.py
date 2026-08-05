@@ -40,6 +40,8 @@ uniform float u_time;
 uniform vec3 u_rgb_shift;  // (amount, speed, 0)
 uniform mat3 u_uv_matrix;      // canvas -> UV homography (corner pin)
 uniform int u_uv_projective;   // 0 = per-vertex v_uv, 1 = u_uv_matrix
+uniform vec2 u_media_offset;   // shift in UV units
+uniform float u_media_rotation; // radians, about the media centre
 
 void main() {
     vec2 uv = v_uv;
@@ -53,6 +55,17 @@ void main() {
             uv = h.xy / h.z;
         }
     }
+
+    // Media transform: rotate about the media's centre, then pan. Applied
+    // after the surface mapping so it repositions the content within the
+    // surface rather than moving the surface itself.
+    if (u_media_rotation != 0.0) {
+        float c = cos(u_media_rotation);
+        float s = sin(u_media_rotation);
+        vec2 centred = uv - 0.5;
+        uv = vec2(centred.x * c - centred.y * s, centred.x * s + centred.y * c) + 0.5;
+    }
+    uv -= u_media_offset;
 
     // RGB shift effect
     if (u_rgb_shift.x > 0.001) {

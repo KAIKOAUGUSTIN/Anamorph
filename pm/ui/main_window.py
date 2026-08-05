@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 from PySide6.QtCore import Qt, QSize, QStandardPaths
-from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QKeySequence, QUndoStack
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -23,9 +23,11 @@ from PySide6.QtWidgets import (
 )
 
 from pm.io.project_io import load_project, save_project
+from pm.model.commands import RemoveShapesCommand
 from pm.model.project import Project
 from pm.model.shapes import Shape
 from pm.model.workspace_manager import WorkspaceManager
+from pm.render.test_pattern import PATTERNS
 from pm.ui.canvas_editor import CanvasEditor
 from pm.ui.object_list import ObjectList
 from pm.ui.property_panel import PropertyPanel
@@ -36,6 +38,10 @@ from pm.ui.widgets import ArrowSlider
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
+        # One stack per window; cleared when the active project is swapped,
+        # since commands hold references into a specific project's shape list.
+        self.undo_stack = QUndoStack(self)
+
         # Workspace manager for handling multiple screens
         self.workspace_manager = WorkspaceManager(self)
         self.workspace_manager.set_base_path(self._get_workspace_base_path())
@@ -49,6 +55,7 @@ class MainWindow(QMainWindow):
         self.workspace_manager.workspace_changed.connect(self._on_workspace_changed)
 
         self.selected_screen_index: Optional[int] = None
+        self._connected_project: Optional[Project] = None
 
         self._build_ui()
         self._connect_signals()
@@ -80,6 +87,7 @@ class MainWindow(QMainWindow):
 
         # Canvas and panels
         self.canvas = CanvasEditor(self.project)
+        self.canvas.set_undo_stack(self.undo_stack)
         self.object_list = ObjectList()
         self.object_list.setObjectName("objectListPanel")
         self.property_panel = PropertyPanel()
@@ -164,6 +172,17 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
+        self.action_snap = QAction("Snap", self)
+        self.action_snap.setCheckable(True)
+        self.action_snap.setChecked(True)
+        self.action_snap.setToolTip(
+            "Snap dragged vertices to other surfaces' corners and edges.\n"
+            "Hold Alt to bypass for a single drag."
+        )
+        toolbar.addAction(self.action_snap)
+
+        toolbar.addSeparator()
+
         # Screen selector dropdown (NEW)
         self.screen_combo = QComboBox()
         self.screen_combo.setFixedWidth(180)
@@ -196,8 +215,19 @@ class MainWindow(QMainWindow):
         self.action_projection = QAction("Project", self)
         self.action_test_mode = QAction("Test Mode", self)
         self.action_test_mode.setCheckable(True)
+        self.action_test_mode.setToolTip(
+            "Replace the output with a calibration pattern for focusing and\n"
+            "squaring the projector before mapping anything."
+        )
         toolbar.addAction(self.action_projection)
         toolbar.addAction(self.action_test_mode)
+
+        self.pattern_combo = QComboBox()
+        self.pattern_combo.setFixedWidth(140)
+        for value, label in PATTERNS:
+            self.pattern_combo.addItem(label, value)
+        self.pattern_combo.setEnabled(False)
+        toolbar.addWidget(self.pattern_combo)
 
         # Spacer for zoom control
         spacer = QWidget()
@@ -245,6 +275,17 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(self.action_rescan)
 
         edit_menu = self.menuBar().addMenu("Edit")
+        self.action_undo = self.undo_stack.createUndoAction(self, "Undo")
+        self.action_redo = self.undo_stack.createRedoAction(self, "Redo")
+        self.action_undo.setShortcut(QKeySequence.Undo)
+        self.action_redo.setShortcuts([QKeySequence.Redo, QKeySequence("Ctrl+Y")])
+        self.action_undo.setShortcutContext(Qt.ApplicationShortcut)
+        self.action_redo.setShortcutContext(Qt.ApplicationShortcut)
+        self.addAction(self.action_undo)
+        self.addAction(self.action_redo)
+        edit_menu.addAction(self.action_undo)
+        edit_menu.addAction(self.action_redo)
+        edit_menu.addSeparator()
         edit_menu.addAction(self.action_delete)
 
         # Status bar with styled mode indicator
@@ -283,6 +324,8 @@ class MainWindow(QMainWindow):
         self.action_test_mode.toggled.connect(self._on_test_mode_toggled)
         self.action_delete.triggered.connect(lambda _checked=False: self._delete_selected_shapes())
         self.action_rescan.triggered.connect(lambda _checked=False: self._rescan_screens())
+        self.action_snap.toggled.connect(self.canvas.set_snap_enabled)
+        self.pattern_combo.currentIndexChanged.connect(self._on_test_pattern_changed)
 
         self.action_new.triggered.connect(lambda _checked=False: self._new_project())
         self.action_open.triggered.connect(lambda _checked=False: self._open_project())
@@ -307,8 +350,12 @@ class MainWindow(QMainWindow):
             app.screenRemoved.connect(self._on_screen_removed)
         self.property_panel.shape_changed.connect(self._on_property_changed)
 
-        self.project.changed.connect(self._refresh_object_list)
-        self.project.changed.connect(self._update_project_label)
+        # Same set _set_project manages, so a later switch cleans these up
+        # instead of stacking a second copy on top.
+        for slot in self._project_slots():
+            self.project.changed.connect(slot)
+        self._connected_project = self.project
+        self.property_panel.set_undo_context(self.project, self.undo_stack)
 
         # Screen combo
         self.screen_combo.currentIndexChanged.connect(self._on_screen_selected)
@@ -433,20 +480,21 @@ class MainWindow(QMainWindow):
         self._set_project(self.project)
 
         if geometry:
+            was_clean = not self._has_unsaved_changes()
             self.project.canvas.width = geometry.width()
             self.project.canvas.height = geometry.height()
             self.project.touch()
+            if was_clean:
+                # Matching the canvas to the target display is bookkeeping,
+                # not an edit worth warning the user about losing.
+                self.project.mark_saved()
             self.canvas.fit_to_canvas()
 
         self.selected_screen_index = screen_index
 
     def _has_unsaved_changes(self) -> bool:
-        """Check if current project has unsaved changes."""
-        # If project has shapes but no path, it's unsaved
-        if len(self.project.shapes) > 0 and not self.project.path:
-            return True
-        # Could add more sophisticated tracking here if needed
-        return False
+        """True only if the project changed since it was last saved or loaded."""
+        return bool(getattr(self.project, "dirty", False))
 
     def _on_workspace_changed(self, screen_id: str) -> None:
         """Handle workspace change signal."""
@@ -549,19 +597,39 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Error", f"Failed to save project: {exc}")
 
+    def _project_slots(self):
+        """Everything that has to follow the active project. Connected and
+        disconnected as one set so the two can never drift apart."""
+        return (
+            self._refresh_object_list,
+            self._update_project_label,
+            # Keeps the coordinate boxes honest while a vertex is dragged.
+            self.property_panel.refresh_geometry,
+        )
+
     def _set_project(self, project: Project) -> None:
-        try:
-            self.project.changed.disconnect(self._refresh_object_list)
-            self.project.changed.disconnect(self._update_project_label)
-        except Exception:
-            pass
+        # Disconnect from whichever project we actually attached to, not from
+        # self.project: _on_workspace_changed fires during a screen switch and
+        # has already repointed that attribute by the time we get here. Old
+        # workspaces stay alive in the manager, so leaving connections behind
+        # would pile up a new set on every switch.
+        if self._connected_project is not None and self._connected_project is not project:
+            for slot in self._project_slots():
+                self._connected_project.changed.disconnect(slot)
+            self._connected_project = None
 
         self.project = project
-        self.project.changed.connect(self._refresh_object_list)
-        self.project.changed.connect(self._update_project_label)
-        self.canvas.project = self.project
-        self.canvas.scene.project = self.project
-        self.project.changed.connect(self.canvas._sync_items)
+        self.canvas.set_project(project)
+        if self._connected_project is not project:
+            for slot in self._project_slots():
+                self.project.changed.connect(slot)
+            self._connected_project = project
+
+        # Commands capture a project instance; carrying them across a switch
+        # would undo edits into a shape list that no longer exists.
+        self.undo_stack.clear()
+        self.property_panel.set_undo_context(self.project, self.undo_stack)
+
         self._refresh_object_list()
         self.property_panel.set_shape(None)
         self._update_project_label()
@@ -571,7 +639,13 @@ class MainWindow(QMainWindow):
             pw.close()
         self._projection_windows.clear()
 
-        self.action_test_mode.setChecked(bool(self.project.ui_state.get("test_mode", False)))
+        test_mode = bool(self.project.ui_state.get("test_mode", False))
+        self.action_test_mode.setChecked(test_mode)
+        self.pattern_combo.setEnabled(test_mode)
+        pattern_index = self.pattern_combo.findData(self.project.ui_state.get("test_pattern", "grid"))
+        self.pattern_combo.blockSignals(True)
+        self.pattern_combo.setCurrentIndex(pattern_index if pattern_index >= 0 else 0)
+        self.pattern_combo.blockSignals(False)
 
     def _toggle_projection(self) -> None:
         """Toggle projection for the current screen."""
@@ -617,6 +691,18 @@ class MainWindow(QMainWindow):
 
     def _on_test_mode_toggled(self, checked: bool) -> None:
         self.project.ui_state["test_mode"] = bool(checked)
+        self.pattern_combo.setEnabled(bool(checked))
+        self.project.touch()
+        if checked and not self._projection_windows:
+            self.statusBar().showMessage(
+                "Test pattern is live on the projection output - press Project to open it", 5000
+            )
+
+    def _on_test_pattern_changed(self, index: int) -> None:
+        value = self.pattern_combo.itemData(index)
+        if not value:
+            return
+        self.project.ui_state["test_pattern"] = value
         self.project.touch()
 
     def _delete_selected_shapes(self) -> None:
@@ -635,8 +721,14 @@ class MainWindow(QMainWindow):
                     selected_ids.append(shape_id)
         if not selected_ids:
             return
-        for shape_id in dict.fromkeys(selected_ids):
-            self.project.remove_shape(shape_id)
+        unique_ids = list(dict.fromkeys(selected_ids))
+        self.undo_stack.push(
+            RemoveShapesCommand(
+                self.project,
+                unique_ids,
+                "Delete Shape" if len(unique_ids) == 1 else f"Delete {len(unique_ids)} Shapes",
+            )
+        )
         self.property_panel.set_shape(None)
 
     def _on_screen_added(self, screen) -> None:
@@ -652,24 +744,17 @@ class MainWindow(QMainWindow):
         if screen == primary:
             return
 
+        # Deliberately not a modal dialog. A display can appear mid-show when
+        # a cable is jostled, and a modal here would block the output until
+        # someone found the mouse. The screen is added to the dropdown and
+        # announced; switching to it stays the operator's call.
         geometry = screen.geometry()
-        msg = self._styled_message_box(
-            "New Screen Detected",
-            f"A new screen was connected:\n\n{screen_name}\n{geometry.width()}x{geometry.height()}\n\nSwitch to this screen?",
-            QMessageBox.Question,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
+        self._update_screen_combo()
+        self.statusBar().showMessage(
+            f"Screen connected: {screen_name} ({geometry.width()}x{geometry.height()}) "
+            f"- available in the screen selector",
+            8000,
         )
-
-        if msg.exec() == QMessageBox.Yes:
-            self._update_screen_combo()
-            screens = self.workspace_manager.get_available_screens()
-            for idx, screen_id, s_name, _ in screens:
-                if s_name == screen_name:
-                    self._update_screen_combo_selection(screen_id)
-                    break
-        else:
-            self._update_screen_combo()
 
     def _on_screen_removed(self, screen) -> None:
         """Handle screen disconnected."""
