@@ -33,7 +33,7 @@ python projection_gui.py
   - `shapes.py` - PolygonShape (per-edge visibility and bezier controls), CircleShape and MeshShape dataclasses, plus `Mask`; serialized via `shape_to_dict`/`shape_from_dict`
   - `media.py` - MediaRef (image/video) with fit modes, UV transform, and `SourceRect` (which region of the media feeds the surface)
   - `effects.py` - Effects (pulse, strobe, RGB shift) with parameters
-  - `commands.py` - Undoable edits as `QUndoCommand`s, plus `EditSession` for turning a drag into one step
+  - `commands.py` - Undoable edits as `QUndoCommand`s, plus `EditSession` for turning a drag - of one shape or a whole group - into one step
   - `snapping.py` - Magnetic snap search (vertex, then edge, then grid); pure geometry
   - `output.py` - `Output` (canvas region, keystone, `EdgeBlend`, `ColorCorrection`) and `split_outputs`
   - `project_store.py` - Loads/saves the one session project; migrates the old per-screen workspaces
@@ -43,7 +43,7 @@ python projection_gui.py
   - `canvas_editor.py` - Interactive QGraphicsView for shape editing; vertex handles plus move/rotate/scale gestures
   - `projection_window.py` - Full-screen projection output window
   - `property_panel.py` - Property editing UI for selected shape
-  - `object_list.py` - Layer list with visibility, lock marker and Solo
+  - `object_list.py` - Layer list with visibility, lock and group markers, and Solo
   - `source_region.py` - Draggable rectangle over the media thumbnail, for picking the input region
   - `output_panel.py` - `OutputDialog`: per-projector region, keystone, blend and colour
 - `styles.py` - Studio Dark Luxury theme with cyan accents; provides `STUDIO_DARK_QSS` stylesheet and `COLORS` palette for consistent UI styling
@@ -131,9 +131,17 @@ python projection_gui.py
 
    `MeshShape` has no `masks` field at all, deliberately: a mesh's UVs come from its grid position, and re-triangulating the boundary to cut a hole throws that parametrisation away - the one thing a mesh exists for. Masking a bent surface needs its own answer.
 
-9. **Snapping**: `find_snap` (`pm/model/snapping.py`) prefers a vertex, then an edge, then the grid. The dragged shape is excluded from its own candidates - its adjacent edges are zero pixels away and would pin the vertex in place. The threshold is in screen pixels, divided by the zoom before use, so the magnet feels constant to the hand.
+9. **Groups**: `shape.group_id` ties surfaces together. A window frame is four panels; a colonnade is a dozen identical columns - once they sit right relative to each other, nudging the arrangement has to move all of them.
 
-10. **Input space**: `MediaRef.source_rect` (a `SourceRect`) says *which part* of the media feeds a surface, independent of where that surface sits. One clip can drive six surfaces, each taking a different region. It is applied last in the UV chain - after fit, corner pin and `MediaTransform` - in `FRAGMENT_SHADER_TEXTURE`, and mirrored in `canvas_editor._paint_media`. Aspect ratio and pixel offsets are measured against the *region*, not the whole file.
+   A group is that promise and nothing more: there is no container object and no coordinate space of its own. Members stay independent shapes with their own vertices, media and masks, and dragging a *vertex* still edits only that shape. What is shared is the body gesture - `_drag_members` returns the group (or, for loose shapes, the current multi-selection), and every member is transformed about the group's shared pivot (`_members_centre`). Rotating about each member's own centre would spin the parts in place and leave the arrangement untouched, which is not what "rotate the group" means to anyone.
+
+   Because a gesture now touches N shapes, `EditSession` snapshots many (`begin_many`) and commits a `ShapesEditCommand` - a single entry, not a macro, since a macro is N entries the user can only step over together and `mergeWith` cannot see inside one. A single-shape edit still goes through `ShapeEditCommand` so slider merging is unchanged. A locked member stays put while the rest of the group moves, which is what locking one surface after calibrating it is for.
+
+   Selecting one member selects the whole group, and the bounding box spans it: a group that looked like a single shape until something moved unexpectedly would be worse than no group at all. `Ctrl`+click adds a loose shape to the selection; the layer list numbers each group so membership is legible when a facade has four of them.
+
+10. **Snapping**: `find_snap` (`pm/model/snapping.py`) prefers a vertex, then an edge, then the grid. The dragged shape is excluded from its own candidates - its adjacent edges are zero pixels away and would pin the vertex in place. The threshold is in screen pixels, divided by the zoom before use, so the magnet feels constant to the hand.
+
+11. **Input space**: `MediaRef.source_rect` (a `SourceRect`) says *which part* of the media feeds a surface, independent of where that surface sits. One clip can drive six surfaces, each taking a different region. It is applied last in the UV chain - after fit, corner pin and `MediaTransform` - in `FRAGMENT_SHADER_TEXTURE`, and mirrored in `canvas_editor._paint_media`. Aspect ratio and pixel offsets are measured against the *region*, not the whole file.
 
    Axis-aligned on purpose: a free quad here would be a second homography stacked on the corner pin, and the real need ("this wall shows the left third") is a rectangle.
 
@@ -141,7 +149,7 @@ python projection_gui.py
 
 Projects saved as JSON with `.pmap.json` extension containing:
 - Canvas dimensions and background color
-- Shapes array with full state (points, colors, media, effects); a mesh also stores `rows`/`cols`, a curved edge stores `curve1`/`curve2`, and a masked surface stores `masks`
+- Shapes array with full state (points, colors, media, effects); a mesh also stores `rows`/`cols`, a curved edge stores `curve1`/`curve2`, a masked surface stores `masks`, and a grouped one stores `group_id`
 - Media library paths
 - `outputs`: one entry per projector (region, keystone corners, blend, colour)
 - UI state (`last_projection_screen_id`, `test_mode`, `test_pattern`)
@@ -169,6 +177,7 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 - **Polygon/Circle/Mesh** - Add new shapes. Mesh is the bendable one: a control grid for columns, cylinders and domes
 - **Duplicate** - Copy the selected surface with an offset (`Ctrl+D`)
 - **Mask** - Cut a hole in the selected surface for a window, doorway or pillar (`Ctrl+M`)
+- **Group / Ungroup** - Make the selected surfaces move as one (`Ctrl+G`, `Ctrl+Shift+G`)
 - **Snap** - Magnetic snapping of dragged vertices to other surfaces
 - **Project** - Toggle fullscreen projection to selected screen
 - **Test Mode** + pattern dropdown - Replace the output with a calibration pattern
@@ -182,6 +191,8 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 - `Alt` while dragging a vertex - Bypass snapping for that drag
 - `Ctrl+D` - Duplicate the selected shape
 - `Ctrl+M` - Cut a mask (a hole) in the selected surface
+- `Ctrl+G` / `Ctrl+Shift+G` - Group / ungroup the selected surfaces
+- `Ctrl` + click - Add a surface to the selection
 - Double-click an edge - Insert a vertex there
 - `Alt` + double-click an edge - Curve it, or straighten it again
 - `Delete` / `Backspace` - Remove selected shape
@@ -216,6 +227,7 @@ pytest
 - `tests/test_mesh.py` - patch interpolation, UVs following the bend, density resampling, mesh handles and gestures
 - `tests/test_bezier_edges.py` - edge-local controls, the straight-by-default invariant, outward bowing, curve handles and hit testing
 - `tests/test_masks.py` - holes cut from the triangulated area, the odd-even preview, masks following the shape, persistence
+- `tests/test_groups.py` - group selection, the shared pivot, one undo step for a group gesture, locked members
 
 Rendering itself is not covered by the suite: `QOpenGLWidget` refuses to create a
 context on the `offscreen` platform. To check the actual output, run under a real

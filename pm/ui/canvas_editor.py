@@ -938,7 +938,13 @@ class CanvasEditor(QGraphicsView):
         else:
             model = getattr(self._current_selected_item(), "model", None)
 
-        self._session.begin(model)
+        # A body gesture on a grouped surface moves every member, so every
+        # member has to be snapshotted or undo would put only one of them back.
+        if model is not None and isinstance(hit_item, (PolygonItem, CircleItem, MeshItem, TransformHandle)):
+            item = hit_item.item if isinstance(hit_item, TransformHandle) else hit_item
+            self._session.begin_many([member.model for member in self._drag_members(item)])
+        else:
+            self._session.begin(model)
 
     GESTURE_LABELS = {"move": "Move Shape", "rotate": "Rotate Shape", "scale": "Scale Shape"}
 
@@ -1462,14 +1468,34 @@ class CanvasEditor(QGraphicsView):
             return item.parentItem()
         return self._current_polygon_item()
 
-    def select_shape(self, shape_id: Optional[str]) -> None:
-        for item in self.scene.selectedItems():
-            item.setSelected(False)
-        if not shape_id:
+    def select_shape(self, shape_id: Optional[str], additive: bool = False) -> None:
+        """Select a surface - and, if it is grouped, the rest of its group.
+
+        Clicking one member and getting only that member back would make a
+        group invisible: nothing on screen would say the surfaces travel
+        together until something moved unexpectedly.
+        """
+        item = self.items_by_id.get(shape_id) if shape_id else None
+        if additive and item is not None:
+            wanted = self._group_items(item)
+            select = not item.isSelected()
+            for member in wanted:
+                member.setSelected(select)
             return
-        item = self.items_by_id.get(shape_id)
-        if item:
-            item.setSelected(True)
+
+        for selected in self.scene.selectedItems():
+            selected.setSelected(False)
+        if item is None:
+            return
+        for member in self._group_items(item):
+            member.setSelected(True)
+
+    def selected_shape_ids(self) -> List[str]:
+        return [
+            item.model.id
+            for item in self.scene.selectedItems()
+            if isinstance(item, (PolygonItem, CircleItem, MeshItem))
+        ]
 
     def set_shape_visibility(self, shape_id: str, visible: bool) -> None:
         item = self.items_by_id.get(shape_id)
@@ -1494,6 +1520,12 @@ class CanvasEditor(QGraphicsView):
                 self._active_vertex = (hit_item.owner, hit_item.index)
             elif body is not None:
                 self.setDragMode(QGraphicsView.NoDrag)
+                # Ctrl adds to the selection; without it, clicking a member
+                # of a group brings the whole group along.
+                if event.modifiers() & Qt.ControlModifier and not self._body_drag:
+                    self.select_shape(body.model.id, additive=True)
+                elif not body.isSelected():
+                    self.select_shape(body.model.id)
                 self._begin_edit_for(body)
                 self._active_vertex = None
                 # Dragging the body used to need Shift and only ever moved.
@@ -1630,18 +1662,42 @@ class CanvasEditor(QGraphicsView):
             return "scale"
         return "move"
 
-    def _begin_body_drag(self, item, scene_pos: QPointF, modifiers, mode: Optional[str] = None) -> None:
+    def _group_items(self, item):
+        """Every item that moves when this one does.
+
+        A grouped surface is not a container - the members stay independent
+        shapes with their own vertices. Grouping only says that a body gesture
+        on any of them is a gesture on all of them, which is what mapping a
+        window frame or a row of columns actually needs.
+        """
+        group_id = getattr(item.model, "group_id", None)
+        if not group_id:
+            return [item]
+        members = [
+            self.items_by_id[shape.id]
+            for shape in self.project.shapes
+            if getattr(shape, "group_id", None) == group_id and shape.id in self.items_by_id
+        ]
+        return members or [item]
+
+    def _drag_members(self, item):
+        """The items a drag will actually touch: the group, or the selection."""
+        if getattr(item.model, "group_id", None):
+            return self._group_items(item)
+        selected = [
+            other for other in self.scene.selectedItems()
+            if isinstance(other, (PolygonItem, CircleItem, MeshItem))
+        ]
+        if item in selected and len(selected) > 1:
+            return selected
+        return [item]
+
+    @staticmethod
+    def _member_snapshot(item) -> Dict[str, object]:
         shape = item.model
-        if shape.locked:
-            self._body_drag = {}
-            return
-        self._body_drag = {
+        return {
             "item": item,
-            # A bounding-box grip names its own gesture; a drag on the body
-            # reads it off the modifiers.
-            "mode": mode or self._body_gesture(modifiers),
-            "start": (scene_pos.x(), scene_pos.y()),
-            "centre": self._shape_centre(shape),
+            "shape": shape,
             "points": list(shape.points) if isinstance(shape, (PolygonShape, MeshShape)) else None,
             # Masks are canvas-space rings, so every body gesture has to carry
             # them: a window that stays put while its wall moves is a hole in
@@ -1654,13 +1710,61 @@ class CanvasEditor(QGraphicsView):
             "handle_angle": getattr(item, "handle_angle", 0.0),
         }
 
+    def _members_centre(self, members) -> Tuple[float, float]:
+        """The pivot a gesture turns about: the centre of everything moving.
+
+        Rotating a group about each member's own centre would spin the parts
+        in place and leave the arrangement untouched, which is not what
+        "rotate the group" means to anyone.
+        """
+        if len(members) == 1:
+            return self._shape_centre(members[0]["shape"])
+        boxes = [self._shape_bounds(member["shape"]) for member in members]
+        return (
+            (min(b[0] for b in boxes) + max(b[1] for b in boxes)) / 2.0,
+            (min(b[2] for b in boxes) + max(b[3] for b in boxes)) / 2.0,
+        )
+
+    @staticmethod
+    def _shape_bounds(shape: Shape) -> Tuple[float, float, float, float]:
+        if isinstance(shape, CircleShape):
+            cx, cy = shape.center
+            rx, ry = max(shape.radius_x, 1.0), max(shape.radius_y, 1.0)
+            return (cx - rx, cx + rx, cy - ry, cy + ry)
+        points = shape.outline() if isinstance(shape, PolygonShape) else shape.points
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        return (min(xs), max(xs), min(ys), max(ys))
+
+    def _begin_body_drag(self, item, scene_pos: QPointF, modifiers, mode: Optional[str] = None) -> None:
+        if item.model.locked:
+            self._body_drag = {}
+            return
+        # A locked member of a group stays put while the rest of the group
+        # moves - that is what locking one surface after calibrating it means.
+        members = [
+            self._member_snapshot(other)
+            for other in self._drag_members(item)
+            if not other.model.locked
+        ]
+        if not members:
+            self._body_drag = {}
+            return
+        self._body_drag = {
+            "item": item,
+            "members": members,
+            # A bounding-box grip names its own gesture; a drag on the body
+            # reads it off the modifiers.
+            "mode": mode or self._body_gesture(modifiers),
+            "start": (scene_pos.x(), scene_pos.y()),
+            "centre": self._members_centre(members),
+        }
+
     def _update_body_drag(self, scene_pos: QPointF, modifiers) -> bool:
         state = self._body_drag
         if not state:
             return False
 
-        item = state["item"]
-        shape = item.model
         sx, sy = state["start"]
         cx, cy = state["centre"]
         dx, dy = scene_pos.x() - sx, scene_pos.y() - sy
@@ -1673,77 +1777,89 @@ class CanvasEditor(QGraphicsView):
                     dy = 0.0
                 else:
                     dx = 0.0
-            self._apply_body_move(item, shape, state, dx, dy)
+            for member in state["members"]:
+                self._apply_body_move(member, dx, dy)
         elif mode == "rotate":
             start_angle = math.atan2(sy - cy, sx - cx)
             angle = math.atan2(scene_pos.y() - cy, scene_pos.x() - cx) - start_angle
             if modifiers & Qt.ShiftModifier:
                 step = math.radians(15.0)
                 angle = round(angle / step) * step
-            self._apply_body_rotate(item, shape, state, angle)
+            for member in state["members"]:
+                self._apply_body_rotate(member, (cx, cy), angle)
         else:  # scale
             start_len = math.hypot(sx - cx, sy - cy)
             if start_len < 1e-6:
                 return True
             factor = math.hypot(scene_pos.x() - cx, scene_pos.y() - cy) / start_len
             factor = max(0.05, factor)
-            self._apply_body_scale(item, shape, state, factor)
+            for member in state["members"]:
+                self._apply_body_scale(member, (cx, cy), factor)
 
-        self._update_mode_handles(item)
+        for member in state["members"]:
+            self._update_mode_handles(member["item"])
         self.project.touch()
         return True
 
     @staticmethod
-    def _apply_to_masks(shape, state, transform) -> None:
+    def _apply_to_masks(shape, member, transform) -> None:
         """Run a body gesture's point transform over the shape's masks too."""
-        for mask, points in zip(getattr(shape, "masks", []), state.get("masks") or []):
+        for mask, points in zip(getattr(shape, "masks", []), member.get("masks") or []):
             mask.points = [transform(x, y) for x, y in points]
 
-    def _apply_body_move(self, item, shape, state, dx: float, dy: float) -> None:
-        self._apply_to_masks(shape, state, lambda x, y: (x + dx, y + dy))
+    def _apply_body_move(self, member, dx: float, dy: float) -> None:
+        item, shape = member["item"], member["shape"]
+        self._apply_to_masks(shape, member, lambda x, y: (x + dx, y + dy))
         if isinstance(shape, (PolygonShape, MeshShape)):
-            shape.points = [(x + dx, y + dy) for x, y in state["points"]]
+            shape.points = [(x + dx, y + dy) for x, y in member["points"]]
             item.update_path()
         else:
-            ox, oy = state["center"]
+            ox, oy = member["center"]
             shape.center = (ox + dx, oy + dy)
-            shape.anchors = [(x + dx, y + dy) for x, y in state["anchors"]]
+            shape.anchors = [(x + dx, y + dy) for x, y in member["anchors"]]
             item.update_rect()
 
-    def _apply_body_rotate(self, item, shape, state, angle: float) -> None:
-        cx, cy = state["centre"]
+    def _apply_body_rotate(self, member, centre, angle: float) -> None:
+        item, shape = member["item"], member["shape"]
+        cx, cy = centre
         cos_a, sin_a = math.cos(angle), math.sin(angle)
 
         def spin(x, y):
             ox, oy = x - cx, y - cy
             return (cx + ox * cos_a - oy * sin_a, cy + ox * sin_a + oy * cos_a)
 
-        self._apply_to_masks(shape, state, spin)
+        self._apply_to_masks(shape, member, spin)
         if isinstance(shape, (PolygonShape, MeshShape)):
-            shape.points = [spin(x, y) for x, y in state["points"]]
+            shape.points = [spin(x, y) for x, y in member["points"]]
             item.update_path()
         else:
             # A circle has no orientation of its own, so rotating it turns the
-            # handles and the media inside it rather than the outline.
-            item.handle_angle = state["handle_angle"] + angle
+            # handles and the media inside it rather than the outline. Inside a
+            # group its centre still has to travel around the group's pivot.
+            item.handle_angle = member["handle_angle"] + angle
+            shape.center = spin(*member["center"])
+            shape.anchors = [spin(x, y) for x, y in member["anchors"]]
             if shape.media:
                 shape.media.transform.rotation = math.degrees(angle)
             item.update_rect()
 
-    def _apply_body_scale(self, item, shape, state, factor: float) -> None:
-        cx, cy = state["centre"]
+    def _apply_body_scale(self, member, centre, factor: float) -> None:
+        item, shape = member["item"], member["shape"]
+        cx, cy = centre
         self._apply_to_masks(
-            shape, state, lambda x, y: (cx + (x - cx) * factor, cy + (y - cy) * factor)
+            shape, member, lambda x, y: (cx + (x - cx) * factor, cy + (y - cy) * factor)
         )
         if isinstance(shape, (PolygonShape, MeshShape)):
             shape.points = [
                 (cx + (x - cx) * factor, cy + (y - cy) * factor)
-                for x, y in state["points"]
+                for x, y in member["points"]
             ]
             item.update_path()
         else:
-            shape.radius_x = max(1.0, state["radius_x"] * factor)
-            shape.radius_y = max(1.0, state["radius_y"] * factor)
+            ox, oy = member["center"]
+            shape.center = (cx + (ox - cx) * factor, cy + (oy - cy) * factor)
+            shape.radius_x = max(1.0, member["radius_x"] * factor)
+            shape.radius_y = max(1.0, member["radius_y"] * factor)
             item.update_rect()
 
     def _end_body_drag(self) -> None:
@@ -1786,15 +1902,15 @@ class CanvasEditor(QGraphicsView):
         if not self._transform_handles or item is None:
             return
 
-        shape = item.model
-        if isinstance(shape, CircleShape):
-            cx, cy = shape.center
-            rx, ry = max(shape.radius_x, 1.0), max(shape.radius_y, 1.0)
-            minx, maxx, miny, maxy = cx - rx, cx + rx, cy - ry, cy + ry
-        else:
-            xs = [p[0] for p in shape.points]
-            ys = [p[1] for p in shape.points]
-            minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+        # The box spans everything the grips will move: the group, or the
+        # whole multi-selection. A box around one member would promise a
+        # transform the drag does not perform.
+        members = self._drag_members(item)
+        boxes = [self._shape_bounds(member.model) for member in members]
+        minx = min(b[0] for b in boxes)
+        maxx = max(b[1] for b in boxes)
+        miny = min(b[2] for b in boxes)
+        maxy = max(b[3] for b in boxes)
 
         corners = [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]
         for handle, (x, y) in zip(self._transform_handles[:4], corners):
@@ -1908,14 +2024,17 @@ class CanvasEditor(QGraphicsView):
         if self._active_vertex is not None:
             if not selected or selected[0] is not self._active_vertex[0]:
                 self._active_vertex = None
-        if selected:
-            item = selected[0]
-            if isinstance(item, (PolygonItem, CircleItem, MeshItem)):
+        shapes = [i for i in selected if isinstance(i, (PolygonItem, CircleItem, MeshItem))]
+        if shapes:
+            for item in shapes:
                 self._set_handles_for_item(item)
                 item.set_handles_visible(True)
-                self._build_transform_handles(item)
-                self.selection_changed.emit(item.model)
-                return
+            # One set of grips around everything selected: a group is dragged
+            # as a whole, so the box that says "this is what moves" has to be
+            # the whole thing too.
+            self._build_transform_handles(shapes[0])
+            self.selection_changed.emit(shapes[0].model)
+            return
         self._clear_transform_handles()
         self.selection_changed.emit(None)
 

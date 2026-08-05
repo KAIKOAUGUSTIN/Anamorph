@@ -151,6 +151,17 @@ def mask_from_rect(center: Tuple[float, float], width: float, height: float, nam
     )
 
 
+def new_group_id() -> str:
+    return uuid.uuid4().hex[:8]
+
+
+def group_members(shapes: List[Any], group_id: Optional[str]) -> List[Any]:
+    """Everything sharing a group. Empty when there is no group to share."""
+    if not group_id:
+        return []
+    return [s for s in shapes if getattr(s, "group_id", None) == group_id]
+
+
 def active_masks(shape: Any) -> List[List[Tuple[float, float]]]:
     """The point rings of a shape's usable masks.
 
@@ -179,6 +190,7 @@ class PolygonShape:
     effects: Effects = field(default_factory=Effects)
     visible: bool = True
     locked: bool = False
+    group_id: Optional[str] = None
     masks: List[Mask] = field(default_factory=list)
 
     @property
@@ -279,6 +291,7 @@ class CircleShape:
     effects: Effects = field(default_factory=Effects)
     visible: bool = True
     locked: bool = False
+    group_id: Optional[str] = None
     masks: List[Mask] = field(default_factory=list)
 
     @property
@@ -362,6 +375,7 @@ class MeshShape:
     effects: Effects = field(default_factory=Effects)
     visible: bool = True
     locked: bool = False
+    group_id: Optional[str] = None
     # No `masks` here on purpose. A mesh's UVs come from its grid position,
     # and cutting a hole means re-triangulating the boundary, which throws
     # that parametrisation away - the one thing a mesh exists for. Masking a
@@ -454,6 +468,7 @@ def _common_shape_kwargs(data: Dict[str, Any]) -> Dict[str, Any]:
         "effects": Effects.from_dict(data.get("effects", {})),
         "visible": bool(data.get("visible", True)),
         "locked": bool(data.get("locked", False)),
+        "group_id": data.get("group_id") or None,
         "masks": [Mask.from_dict(m) for m in data.get("masks", [])],
     }
 
@@ -538,6 +553,8 @@ def shape_to_dict(shape: Shape) -> Dict[str, Any]:
     }
     # Absent from files written before masks existed, and absent again when a
     # surface has none - an empty list says nothing worth storing.
+    if getattr(shape, "group_id", None):
+        data["group_id"] = shape.group_id
     if getattr(shape, "masks", None):
         data["masks"] = [mask.to_dict() for mask in shape.masks]
     if isinstance(shape, PolygonShape):
