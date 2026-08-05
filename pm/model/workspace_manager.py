@@ -56,6 +56,7 @@ class WorkspaceManager(QObject):
                     data = json.load(f)
                 project = Project.from_dict(data)
                 project.path = str(workspace_file)
+                project.mark_saved()
                 self._workspaces[screen_id] = project
             except Exception as e:
                 print(f"Failed to load workspace {workspace_file}: {e}")
@@ -77,6 +78,7 @@ class WorkspaceManager(QObject):
             with open(workspace_file, "w", encoding="utf-8") as f:
                 json.dump(project.to_dict(), f, indent=2)
             project.path = str(workspace_file)
+            project.mark_saved()
         except Exception as e:
             print(f"Failed to save workspace {screen_id}: {e}")
 

@@ -33,6 +33,8 @@ python projection_gui.py
   - `shapes.py` - PolygonShape and CircleShape dataclasses with serialization via `shape_to_dict`/`shape_from_dict`
   - `media.py` - MediaRef (image/video) with fit modes (stretch/contain/cover) and UV transform
   - `effects.py` - Effects (pulse, strobe, RGB shift) with parameters
+  - `commands.py` - Undoable edits as `QUndoCommand`s, plus `EditSession` for turning a drag into one step
+  - `snapping.py` - Magnetic snap search (vertex, then edge, then grid); pure geometry
 
 - `pm/ui/` - Qt6/PySide6 UI components
   - `main_window.py` - Central window with toolbar, splitter layout, menus, and screen selection
@@ -47,6 +49,7 @@ python projection_gui.py
   - `gl_renderer.py` - `QOpenGLWidget` renderer with GLSL shaders; uploads media as GL textures and caches them per path
   - `shaders.py` - GLSL sources: shared vertex shader plus texture/solid/stroke fragment shaders
   - `homography.py` - Corner-pin math (numpy only, no Qt/GL), shared by the renderer and the editor preview
+  - `test_pattern.py` - Calibration images (grid / checkerboard / borders) drawn with QPainter
   - `mesh.py` - Triangulation using mapbox_earcut for polygon mesh generation
 
 - `pm/media/` - Media handling
@@ -77,13 +80,23 @@ python projection_gui.py
    - `scale`: Scale from center or edges
    - `rotate`: Rotate around center
 
+6. **Undo**: Commands are snapshot-based (`pm/model/commands.py`), storing a shape's serialised state before and after an edit and swapping them - shapes are mutated in place during a drag, so there is no inverse to replay. `EditSession` snapshots on mouse press and pushes on release, making a drag one undo step; `ShapeEditCommand.mergeWith` collapses same-labelled edits to the same shape within a short window, which is what keeps a slider drag from filling the stack.
+
+   Anything that mutates a shape must go through a command, or it will be silently un-undoable. In the property panel that means calling `self._commit("Label")` instead of emitting `shape_changed` directly.
+
+7. **Snapping**: `find_snap` (`pm/model/snapping.py`) prefers a vertex, then an edge, then the grid. The dragged shape is excluded from its own candidates - its adjacent edges are zero pixels away and would pin the vertex in place. The threshold is in screen pixels, divided by the zoom before use, so the magnet feels constant to the hand.
+
 ### File Format
 
 Projects saved as JSON with `.pmap.json` extension containing:
 - Canvas dimensions and background color
 - Shapes array with full state (points, colors, media, effects)
 - Media library paths
-- UI state (last projection screen, test mode)
+- UI state (`last_projection_screen_id`, `test_mode`, `test_pattern`)
+
+`Project.dirty` is set by `touch()` and cleared by `mark_saved()`, which every
+save and load path calls. It is what the unsaved-changes prompt reads - do not
+go back to inferring it from whether the project has a path.
 
 ### Threading Notes
 
@@ -94,10 +107,17 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 ### Toolbar Actions
 - **Points/Scale/Rotate** - Edit mode switching (toolbar buttons)
 - **Polygon/Circle** - Add new shapes
+- **Snap** - Magnetic snapping of dragged vertices to other surfaces
 - **Project** - Toggle fullscreen projection to selected screen
+- **Test Mode** + pattern dropdown - Replace the output with a calibration pattern
 - **Screen dropdown** - Select target display for projection
 
 ### Keyboard Shortcuts
+- `Ctrl+Z` / `Ctrl+Shift+Z` (or `Ctrl+Y`) - Undo / redo
+- Arrow keys - Nudge the selected shape by 1 unit, or the last-touched vertex
+- `Shift` + arrows - Nudge by 10
+- `Alt` (held while dragging) - Bypass snapping for that drag
+- `Shift` + drag - Move a shape rather than editing its points
 - `Delete` / `Backspace` - Remove selected shape
 - `Escape` - Close fullscreen projection window
 
@@ -114,7 +134,11 @@ pytest
 `tests/conftest.py` forces `QT_QPA_PLATFORM=offscreen`, so the Qt tests need no display.
 
 - `tests/test_homography.py` - corner-pin math, pure numpy
+- `tests/test_snapping.py` - snap priority and the canvas wiring around it
+- `tests/test_undo.py` - command round trips, gesture merging, drag-to-one-step
+- `tests/test_precision.py` - keyboard nudge and typed coordinates
 - `tests/test_corner_pin_ui.py` - fit mode persistence, corner-pin defaults, handle highlighting
+- `tests/test_test_pattern.py` - calibration pattern rendering and persistence
 
 Rendering itself is not covered by the suite: `QOpenGLWidget` refuses to create a
 context on the `offscreen` platform. To check the actual output, run under a real
@@ -125,4 +149,5 @@ compare `GLRenderer.grabFramebuffer()` against the editor preview.
 
 - **Canvas Y is inverted in the vertex shader.** Canvas coordinates grow downward to match the editor; NDC grows upward. Removing that inversion mirrors the projection against what the user is editing.
 - Media fit modes serialize as `stretch`/`contain`/`cover`/`warp`. The combo box shows friendlier labels and keeps the serialized value in `userData` - do not switch back to reading `currentText()`, it would break existing `.pmap.json` files.
-- `MediaTransform` (offset/rotation) is stored and edited in the property panel but is not yet applied by the renderer.
+- `MediaTransform` offsets are in **source pixels** (matching the property panel's range and step); the renderer converts them to UV units against the media size, and rotation is degrees about the media centre.
+- Widgets added to a layout at runtime need `setParent(None)` before `deleteLater()`, and the panel needs `updateGeometry()` afterwards. Without the first, stale rows keep painting where they were; without the second, the enclosing scroll area keeps the old height and clips them.
