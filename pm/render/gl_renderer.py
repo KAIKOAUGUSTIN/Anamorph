@@ -10,26 +10,26 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from OpenGL.GL import (
-    GL_ARRAY_BUFFER, GL_BLEND, GL_COLOR_BUFFER_BIT, GL_COMPILE_STATUS,
-    GL_DYNAMIC_DRAW, GL_ELEMENT_ARRAY_BUFFER, GL_FLOAT, GL_FRAGMENT_SHADER,
-    GL_LINEAR, GL_LINES, GL_LINK_STATUS, GL_NO_ERROR,
-    GL_POSITION, GL_REPEAT, GL_RGBA, GL_SRC_ALPHA, GL_STATIC_DRAW,
+    GL_ARRAY_BUFFER, GL_BLEND, GL_CLAMP_TO_EDGE, GL_COLOR_BUFFER_BIT,
+    GL_COMPILE_STATUS, GL_DYNAMIC_DRAW, GL_ELEMENT_ARRAY_BUFFER, GL_FALSE,
+    GL_FLOAT, GL_FRAGMENT_SHADER, GL_LINEAR, GL_LINES, GL_LINK_STATUS,
+    GL_RGBA, GL_SRC_ALPHA,
     GL_TEXTURE0, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_FILTER,
-    GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TRIANGLES, GL_UNSIGNED_INT,
+    GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TRIANGLES, GL_TRUE,
+    GL_UNSIGNED_BYTE, GL_UNSIGNED_INT,
     GL_VERTEX_SHADER, GL_ONE_MINUS_SRC_ALPHA,
     glActiveTexture, glAttachShader, glBindBuffer, glBindTexture,
     glBindVertexArray, glBlendFunc, glBufferData, glClear, glClearColor,
     glCompileShader, glCreateProgram, glCreateShader, glDeleteBuffers,
     glDeleteProgram, glDeleteShader, glDeleteTextures, glDeleteVertexArrays,
-    glDisableVertexAttribArray, glDrawElements, glEnable, glEnableVertexAttribArray,
-    glGenBuffers, glGenTextures, glGenVertexArrays, glGetAttribLocation,
-    glGetError, glGetProgramInfoLog, glGetProgramiv, glGetShaderInfoLog,
+    glDrawElements, glEnable, glEnableVertexAttribArray,
+    glGenBuffers, glGenTextures, glGenVertexArrays,
+    glGetProgramInfoLog, glGetProgramiv, glGetShaderInfoLog,
     glGetShaderiv, glGetUniformLocation, glLinkProgram, glShaderSource,
-    glTexImage2D, glTexParameteri, glUniform1f, glUniform1i, glUniform2f,
-    glUniform3f, glUniform4f, glUniformMatrix4fv, glUseProgram,
+    glTexImage2D, glTexParameteri, glTexSubImage2D, glUniform1f, glUniform1i,
+    glUniform2f, glUniform3f, glUniform4f, glUniformMatrix3fv, glUseProgram,
     glVertexAttribPointer, glViewport,
 )
-from OpenGL.GL import shaders as gl_shaders
 from PIL import Image
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QImage
@@ -40,6 +40,7 @@ from pm.media.video_player import VideoPlayer
 from pm.model.media import MediaRef
 from pm.model.project import Project
 from pm.model.shapes import CircleShape, PolygonShape, Shape
+from pm.render.homography import canvas_to_uv_matrix, corner_uv_assignment
 from pm.render.mesh import triangulate_circle, triangulate_polygon
 from pm.render.shaders import (
     FRAGMENT_SHADER_SOLID, FRAGMENT_SHADER_STROKE, FRAGMENT_SHADER_TEXTURE,
@@ -69,10 +70,11 @@ class GLRenderer(QOpenGLWidget):
         self._vbo = None
         self._ebo = None
 
-        # Texture cache
-        self._image_cache: Dict[str, int] = {}  # path -> texture ID
+        # Texture cache. Sizes are cached alongside the texture so a frame
+        # never has to touch the source file again.
+        self._image_cache: Dict[str, Tuple[int, Tuple[int, int]]] = {}
         self._video_players: Dict[str, VideoPlayer] = {}
-        self._video_textures: Dict[str, int] = {}  # path -> texture ID
+        self._video_textures: Dict[str, Tuple[int, Tuple[int, int]]] = {}
 
         # Track initialization
         self._gl_initialized = False
@@ -82,8 +84,9 @@ class GLRenderer(QOpenGLWidget):
         for player in self._video_players.values():
             player.stop()
         self._video_players.clear()
-        self._video_textures.clear()
 
+        # _video_textures is cleared by _cleanup_textures, after the GL
+        # objects it names have actually been deleted.
         if self._gl_initialized and self.context():
             self.makeCurrent()
             self._cleanup_textures()
@@ -91,11 +94,12 @@ class GLRenderer(QOpenGLWidget):
             self._cleanup_programs()
 
     def _cleanup_textures(self) -> None:
-        for tex_id in self._image_cache.values():
+        for tex_id, _ in self._image_cache.values():
             glDeleteTextures(1, [tex_id])
-        for tex_id in self._video_textures.values():
+        for tex_id, _ in self._video_textures.values():
             glDeleteTextures(1, [tex_id])
         self._image_cache.clear()
+        self._video_textures.clear()
 
     def _cleanup_buffers(self) -> None:
         if self._vbo:
@@ -220,11 +224,22 @@ class GLRenderer(QOpenGLWidget):
         tex_id, tex_size = self._get_or_create_texture(shape.media)
         if tex_id:
             uvs = self._compute_uvs_from_size(points, tex_size, shape.media)
-            self._draw_textured_shape(points, uvs, indices, tex_id, opacity, shape, now, canvas_w, canvas_h)
+            uv_matrix = self._warp_matrix(shape, points)
+            self._draw_textured_shape(
+                points, uvs, indices, tex_id, opacity, shape, now, canvas_w, canvas_h, uv_matrix
+            )
         else:
             # Solid color fill
             fill = shape.fill_color
             self._draw_solid_shape(points, indices, fill, opacity, shape, now, canvas_w, canvas_h)
+
+    def _warp_matrix(self, shape: Shape, points: List[Tuple[float, float]]) -> Optional[np.ndarray]:
+        """Homography for a corner-pinned surface, or None for every other case."""
+        if (shape.media.fit_mode or "").lower() != "warp":
+            return None
+        if not isinstance(shape, PolygonShape) or len(points) != 4:
+            return None
+        return canvas_to_uv_matrix(points)
 
     def _draw_textured_shape(
         self,
@@ -237,6 +252,7 @@ class GLRenderer(QOpenGLWidget):
         now: float,
         canvas_w: float,
         canvas_h: float,
+        uv_matrix: Optional[np.ndarray] = None,
     ) -> None:
         """Draw a shape with texture."""
         glUseProgram(self._program_texture)
@@ -272,6 +288,18 @@ class GLRenderer(QOpenGLWidget):
             glUniform3f(loc, rgb.amount, rgb.speed, 0.0)
         else:
             glUniform3f(loc, 0.0, 0.0, 0.0)
+
+        # Corner pin. The flag must be written on every draw - uniforms persist
+        # on the program, so skipping the else branch would leak the previous
+        # shape's matrix onto this one.
+        loc = glGetUniformLocation(self._program_texture, "u_uv_projective")
+        if uv_matrix is not None:
+            glUniform1i(loc, 1)
+            loc = glGetUniformLocation(self._program_texture, "u_uv_matrix")
+            # GL_TRUE transposes: numpy is row-major, GLSL mat3 is column-major.
+            glUniformMatrix3fv(loc, 1, GL_TRUE, uv_matrix.astype(np.float32))
+        else:
+            glUniform1i(loc, 0)
 
         # Bind texture
         glActiveTexture(GL_TEXTURE0)
@@ -477,28 +505,14 @@ class GLRenderer(QOpenGLWidget):
         box_w: float,
         box_h: float,
     ) -> List[Tuple[float, float]]:
-        """Compute UVs for warp mode."""
-        if len(points) == 4:
-            maxx = minx + box_w
-            maxy = miny + box_h
-            corners = [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]
-            corner_uvs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+        """Per-vertex UVs for warp mode.
 
-            distances = []
-            for i, (px, py) in enumerate(points):
-                for j, (cx, cy) in enumerate(corners):
-                    dist = (px - cx) ** 2 + (py - cy) ** 2
-                    distances.append((dist, i, j))
-            distances.sort()
-
-            uvs = [(0.0, 0.0)] * 4
-            used_corners = set()
-            assigned_points = set()
-            for _, point_idx, corner_idx in distances:
-                if point_idx not in assigned_points and corner_idx not in used_corners:
-                    uvs[point_idx] = corner_uvs[corner_idx]
-                    assigned_points.add(point_idx)
-                    used_corners.add(corner_idx)
+        These are the fallback the fragment shader uses when the homography
+        cannot be built (degenerate quad, or a shape that is not a quad at
+        all). When it can, `_warp_matrix` supersedes them.
+        """
+        uvs = corner_uv_assignment(points)
+        if uvs is not None:
             return uvs
 
         return [((x - minx) / box_w, (y - miny) / box_h) for x, y in points]
@@ -520,12 +534,9 @@ class GLRenderer(QOpenGLWidget):
         return None, (0, 0)
 
     def _get_image_texture(self, media: MediaRef) -> Tuple[Optional[int], Tuple[int, int]]:
-        cached_tex = self._image_cache.get(media.path)
-        if cached_tex:
-            img = self._load_image(media.path)
-            if img:
-                return cached_tex, (img.width(), img.height())
-            return cached_tex, (1, 1)
+        cached = self._image_cache.get(media.path)
+        if cached:
+            return cached
 
         img = self._load_image(media.path)
         if not img:
@@ -533,8 +544,9 @@ class GLRenderer(QOpenGLWidget):
 
         tex_id = self._create_texture_from_qimage(img)
         if tex_id:
-            self._image_cache[media.path] = tex_id
-            return tex_id, (img.width(), img.height())
+            entry = (tex_id, (img.width(), img.height()))
+            self._image_cache[media.path] = entry
+            return entry
         return None, (0, 0)
 
     def _get_video_texture(self, media: MediaRef) -> Tuple[Optional[int], Tuple[int, int]]:
@@ -549,20 +561,53 @@ class GLRenderer(QOpenGLWidget):
             return None, (0, 0)
         qimg = QImage(frame.data, frame.shape[1], frame.shape[0], frame.strides[0], QImage.Format_RGB888).copy()
         qimg = qimg.convertToFormat(QImage.Format_RGBA8888)
+
+        # One texture per clip, refilled in place. Allocating a fresh texture
+        # every frame - and never deleting it - exhausts GPU memory within
+        # minutes of playback.
+        frame_size = (qimg.width(), qimg.height())
+        cached = self._video_textures.get(media.path)
+        if cached and cached[1] == frame_size:
+            tex_id = cached[0]
+            ptr = self._image_bytes(qimg)
+            glBindTexture(GL_TEXTURE_2D, tex_id)
+            glTexSubImage2D(
+                GL_TEXTURE_2D, 0, 0, 0, frame_size[0], frame_size[1],
+                GL_RGBA, GL_UNSIGNED_BYTE, ptr,
+            )
+            return tex_id, size
+
+        if cached:
+            glDeleteTextures(1, [cached[0]])
+
         tex_id = self._create_texture_from_qimage(qimg)
-        return (tex_id, size) if tex_id else (None, (0, 0))
+        if not tex_id:
+            return None, (0, 0)
+        self._video_textures[media.path] = (tex_id, frame_size)
+        return tex_id, size
+
+    @staticmethod
+    def _image_bytes(image: QImage) -> bytes:
+        """Raw pixels of a QImage, ready for glTex*Image2D.
+
+        PySide6 hands back a correctly sized memoryview; the older
+        `setsize()` dance belongs to PyQt5's sip pointers and raises here.
+        """
+        return bytes(image.constBits())
 
     def _create_texture_from_qimage(self, image: QImage) -> Optional[int]:
         """Create an OpenGL texture from a QImage."""
-        ptr = image.constBits()
-        ptr.setsize(image.sizeInBytes())
+        ptr = self._image_bytes(image)
 
         tex_id = glGenTextures(1)
         glBindTexture(GL_TEXTURE_2D, tex_id)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
+        # Clamped, not repeated: rounding in the corner-pin divide can push a
+        # UV a hair outside [0, 1] at the surface edge, and REPEAT turns that
+        # into a strip of the opposite edge stitched along the border.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image.width(), image.height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, ptr)
 
         return tex_id
