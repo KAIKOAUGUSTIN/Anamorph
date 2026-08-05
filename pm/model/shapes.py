@@ -104,6 +104,67 @@ def _read_control(value: Any, fallback: Tuple[float, float]) -> Tuple[float, flo
 
 
 @dataclass
+class Mask:
+    """A hole cut out of a surface.
+
+    A projector lights everything inside the surface, and real walls have
+    windows, doorways and pillars standing in front of them. Turning the
+    stroke off does not help - the *fill* is what is landing on the glass.
+    A mask removes that region from the surface entirely, so nothing is
+    projected there.
+
+    Points are in canvas coordinates, like the surface's own: the mask travels
+    with the shape because the shape's transforms carry it, not because it is
+    parented to anything.
+    """
+
+    points: List[Tuple[float, float]] = field(default_factory=list)
+    enabled: bool = True
+    name: str = "Mask"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "enabled": bool(self.enabled),
+            "points": [{"x": p[0], "y": p[1]} for p in self.points],
+        }
+
+    @staticmethod
+    def from_dict(data: Dict[str, Any]) -> "Mask":
+        return Mask(
+            points=[
+                (float(p.get("x", 0.0)), float(p.get("y", 0.0)))
+                for p in (data or {}).get("points", [])
+            ],
+            enabled=bool((data or {}).get("enabled", True)),
+            name=str((data or {}).get("name", "Mask")),
+        )
+
+
+def mask_from_rect(center: Tuple[float, float], width: float, height: float, name: str = "Mask") -> Mask:
+    """A rectangular hole, which is what a window or a doorway usually is."""
+    cx, cy = center
+    hw, hh = abs(width) / 2.0, abs(height) / 2.0
+    return Mask(
+        points=[(cx - hw, cy - hh), (cx + hw, cy - hh), (cx + hw, cy + hh), (cx - hw, cy + hh)],
+        name=name,
+    )
+
+
+def active_masks(shape: Any) -> List[List[Tuple[float, float]]]:
+    """The point rings of a shape's usable masks.
+
+    A mask with fewer than three points is not a ring and would make the
+    triangulator produce nonsense rather than a hole.
+    """
+    return [
+        list(mask.points)
+        for mask in getattr(shape, "masks", [])
+        if mask.enabled and len(mask.points) >= 3
+    ]
+
+
+@dataclass
 class PolygonShape:
     id: str
     name: str
@@ -118,6 +179,7 @@ class PolygonShape:
     effects: Effects = field(default_factory=Effects)
     visible: bool = True
     locked: bool = False
+    masks: List[Mask] = field(default_factory=list)
 
     @property
     def type(self) -> str:
@@ -217,6 +279,7 @@ class CircleShape:
     effects: Effects = field(default_factory=Effects)
     visible: bool = True
     locked: bool = False
+    masks: List[Mask] = field(default_factory=list)
 
     @property
     def type(self) -> str:
@@ -299,6 +362,10 @@ class MeshShape:
     effects: Effects = field(default_factory=Effects)
     visible: bool = True
     locked: bool = False
+    # No `masks` here on purpose. A mesh's UVs come from its grid position,
+    # and cutting a hole means re-triangulating the boundary, which throws
+    # that parametrisation away - the one thing a mesh exists for. Masking a
+    # bent surface needs its own answer, not this one.
 
     @property
     def type(self) -> str:
@@ -362,11 +429,18 @@ class MeshShape:
             rows=rows,
             cols=cols,
             points=points,
-            **_common_shape_kwargs(data),
+            **_mesh_shape_kwargs(data),
         )
 
 
 Shape = Union[PolygonShape, CircleShape, MeshShape]
+
+
+def _mesh_shape_kwargs(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Shared fields minus `masks`, which a mesh does not carry."""
+    kwargs = _common_shape_kwargs(data)
+    kwargs.pop("masks", None)
+    return kwargs
 
 
 def _common_shape_kwargs(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -380,6 +454,7 @@ def _common_shape_kwargs(data: Dict[str, Any]) -> Dict[str, Any]:
         "effects": Effects.from_dict(data.get("effects", {})),
         "visible": bool(data.get("visible", True)),
         "locked": bool(data.get("locked", False)),
+        "masks": [Mask.from_dict(m) for m in data.get("masks", [])],
     }
 
 
@@ -461,6 +536,10 @@ def shape_to_dict(shape: Shape) -> Dict[str, Any]:
         "visible": shape.visible,
         "locked": shape.locked,
     }
+    # Absent from files written before masks existed, and absent again when a
+    # surface has none - an empty list says nothing worth storing.
+    if getattr(shape, "masks", None):
+        data["masks"] = [mask.to_dict() for mask in shape.masks]
     if isinstance(shape, PolygonShape):
         data["points"] = [{"x": p[0], "y": p[1]} for p in shape.points]
         data["edges"] = [edge.to_dict() for edge in shape.edges]

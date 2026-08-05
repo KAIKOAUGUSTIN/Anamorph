@@ -38,7 +38,8 @@ from pm.model.snapping import (
 )
 from pm.model.shapes import (
     CircleShape, EdgeVisibility, MeshShape, PolygonShape, Shape,
-    circle_from_center, mesh_from_rect, polygon_from_points,
+    active_masks, circle_from_center, mask_from_rect, mesh_from_rect,
+    polygon_from_points,
 )
 from pm.render.fit import content_rect
 from pm.render.mesh import (
@@ -305,6 +306,25 @@ def polygon_path(shape: PolygonShape) -> QPainterPath:
         else:
             path.lineTo(b[0], b[1])
     path.closeSubpath()
+    return add_mask_subpaths(path, shape)
+
+
+def add_mask_subpaths(path: QPainterPath, shape) -> QPainterPath:
+    """Punch the shape's masks out of `path`.
+
+    A closed inner subpath under the odd-even fill rule is a hole - the same
+    path then serves as the fill *and* as the media's clip, so a window stays
+    dark in the preview for exactly the same reason it does on the wall.
+    """
+    rings = active_masks(shape)
+    if not rings:
+        return path
+    path.setFillRule(Qt.OddEvenFill)
+    for ring in rings:
+        path.moveTo(*ring[0])
+        for point in ring[1:]:
+            path.lineTo(*point)
+        path.closeSubpath()
     return path
 
 
@@ -317,11 +337,14 @@ def _fit_box(shape, path: QPainterPath) -> QRectF:
     pixel is exactly the sort of drift that makes the editor and the output
     disagree once someone zooms in on a seam.
     """
-    if isinstance(shape, PolygonShape) and shape.has_curves:
+    if isinstance(shape, PolygonShape):
         outline = shape.outline()
         xs = [p[0] for p in outline]
         ys = [p[1] for p in outline]
         return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+    if isinstance(shape, CircleShape):
+        rx, ry = max(shape.radius_x, 1.0), max(shape.radius_y, 1.0)
+        return QRectF(shape.center[0] - rx, shape.center[1] - ry, rx * 2, ry * 2)
     return path.boundingRect()
 
 
@@ -510,12 +533,54 @@ class CurveHandle(QGraphicsEllipseItem):
         super().mousePressEvent(event)
 
 
+class MaskHandle(QGraphicsEllipseItem):
+    """One corner of a mask.
+
+    Red, and square-ish in feel rather than the cyan of a surface vertex: a
+    handle that removes projection has to be told apart at a glance from one
+    that shapes it, or the operator drags the wall when they meant the window.
+    """
+
+    def __init__(self, owner, mask_index: int, point_index: int, on_moved, snap_func) -> None:
+        super().__init__(-4.5, -4.5, 9, 9)
+        self.owner = owner
+        self.mask_index = mask_index
+        self.point_index = point_index
+        self.on_moved = on_moved
+        self.snap_func = snap_func
+        self._block = False
+        self.setBrush(QBrush(QColor(232, 76, 92)))
+        self.setPen(QPen(QColor(140, 30, 44), 1.4))
+        self.setFlags(QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemSendsGeometryChanges)
+        self.setZValue(12)
+        self.setToolTip("Mask corner")
+
+    def set_pos_silent(self, x: float, y: float) -> None:
+        self._block = True
+        super().setPos(x, y)
+        self._block = False
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionChange and not self._block:
+            pos = self.snap_func(value) if self.snap_func else value
+            if self.on_moved:
+                self.on_moved(self.owner, self.mask_index, self.point_index, pos)
+            return pos
+        return super().itemChange(change, value)
+
+    def mousePressEvent(self, event) -> None:
+        if self.owner:
+            self.owner.setSelected(True)
+        super().mousePressEvent(event)
+
+
 class PolygonItem(QGraphicsPathItem):
     def __init__(self, model: PolygonShape) -> None:
         super().__init__()
         self.model = model
         self.handles: List[VertexHandle] = []
         self.curve_handles: List[CurveHandle] = []
+        self.mask_handles: List[MaskHandle] = []
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
         self.setBrush(QBrush(QColor(*model.fill_color)))
         self.setPen(QPen(QColor(*model.stroke_color), max(model.stroke_width, 1.0)))
@@ -525,6 +590,8 @@ class PolygonItem(QGraphicsPathItem):
         for handle in self.handles:
             handle.setVisible(visible)
         for handle in self.curve_handles:
+            handle.setVisible(visible)
+        for handle in self.mask_handles:
             handle.setVisible(visible)
 
     def update_path(self) -> None:
@@ -649,6 +716,7 @@ class CircleItem(QGraphicsEllipseItem):
         super().__init__()
         self.model = model
         self.handles: List[VertexHandle] = []
+        self.mask_handles: List[MaskHandle] = []
         self.handle_angle = -math.pi / 2.0
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
         self.setBrush(QBrush(QColor(*model.fill_color)))
@@ -657,6 +725,8 @@ class CircleItem(QGraphicsEllipseItem):
 
     def set_handles_visible(self, visible: bool) -> None:
         for handle in self.handles:
+            handle.setVisible(visible)
+        for handle in self.mask_handles:
             handle.setVisible(visible)
 
     def update_rect(self) -> None:
@@ -683,10 +753,12 @@ class CircleItem(QGraphicsEllipseItem):
 
         ellipse = QPainterPath()
         ellipse.addEllipse(rect)
+        ellipse = add_mask_subpaths(ellipse, self.model)
         if _paint_media(painter, self.model, ellipse):
             painter.setBrush(Qt.NoBrush)
         else:
-            painter.setBrush(QBrush(QColor(*self.model.fill_color)))
+            painter.fillPath(ellipse, QBrush(QColor(*self.model.fill_color)))
+            painter.setBrush(Qt.NoBrush)
         if self.model.stroke_width > 0:
             pen = QPen(QColor(*self.model.stroke_color), max(self.model.stroke_width, 0.5))
             painter.setPen(pen)
@@ -989,6 +1061,7 @@ class CanvasEditor(QGraphicsView):
         item.handles = []
         if isinstance(item, PolygonItem):
             self._clear_curve_handles(item)
+        self._clear_mask_handles(item)
 
     def _create_mesh_handles(self, item: MeshItem) -> None:
         self._clear_handles(item)
@@ -1046,6 +1119,90 @@ class CanvasEditor(QGraphicsView):
         for handle in item.handles:
             handle.setVisible(visible)
         self._update_curve_handles(item)
+
+    # --- masks -----------------------------------------------------------
+
+    def _clear_mask_handles(self, item) -> None:
+        for handle in getattr(item, "mask_handles", []):
+            handle.setParentItem(None)
+            self.scene.removeItem(handle)
+        if hasattr(item, "mask_handles"):
+            item.mask_handles = []
+
+    def _update_mask_handles(self, item) -> None:
+        """One handle per mask corner, rebuilt when the mask list changes."""
+        shape = item.model
+        if not hasattr(item, "mask_handles"):
+            return
+        masks = getattr(shape, "masks", [])
+        wanted = [
+            (mi, pi)
+            for mi, mask in enumerate(masks)
+            for pi in range(len(mask.points))
+        ]
+        if [(h.mask_index, h.point_index) for h in item.mask_handles] != wanted:
+            self._clear_mask_handles(item)
+            for mask_index, point_index in wanted:
+                handle = MaskHandle(
+                    item, mask_index, point_index, self._on_mask_handle_moved,
+                    lambda p, o=item: self._snap_vertex(o, p),
+                )
+                handle.setParentItem(item)
+                item.mask_handles.append(handle)
+
+        visible = item.isSelected() and not shape.locked
+        for handle in item.mask_handles:
+            point = masks[handle.mask_index].points[handle.point_index]
+            handle.set_pos_silent(point[0], point[1])
+            handle.setVisible(visible)
+
+    def _on_mask_handle_moved(self, owner, mask_index: int, point_index: int, pos: QPointF) -> None:
+        shape = owner.model
+        masks = getattr(shape, "masks", [])
+        if shape.locked or mask_index >= len(masks):
+            return
+        mask = masks[mask_index]
+        if point_index >= len(mask.points):
+            return
+        scene_pos = owner.mapToScene(pos)
+        points = list(mask.points)
+        points[point_index] = (scene_pos.x(), scene_pos.y())
+        mask.points = points
+        self._refresh_geometry(owner)
+        self.project.touch()
+
+    def _refresh_geometry(self, item) -> None:
+        if isinstance(item, CircleItem):
+            item.update_rect()
+        elif hasattr(item, "update_path"):
+            item.update_path()
+        item.update()
+
+    def add_mask(self, item) -> bool:
+        """Cut a starter hole in the middle of the surface, sized to fit it."""
+        shape = item.model
+        if shape.locked or not hasattr(shape, "masks"):
+            return False
+
+        box = item.boundingRect()
+        centre = box.center()
+        if self._session is not None:
+            self._session.begin(shape)
+        shape.masks.append(
+            mask_from_rect(
+                (centre.x(), centre.y()),
+                max(box.width() * 0.3, 20.0),
+                max(box.height() * 0.3, 20.0),
+                name=f"Mask {len(shape.masks) + 1}",
+            )
+        )
+        self._refresh_geometry(item)
+        self._update_mask_handles(item)
+        if self._session is not None:
+            self._session.commit(self.project, "Add Mask")
+        else:
+            self.project.touch()
+        return True
 
     # --- curved edges ----------------------------------------------------
 
@@ -1486,6 +1643,10 @@ class CanvasEditor(QGraphicsView):
             "start": (scene_pos.x(), scene_pos.y()),
             "centre": self._shape_centre(shape),
             "points": list(shape.points) if isinstance(shape, (PolygonShape, MeshShape)) else None,
+            # Masks are canvas-space rings, so every body gesture has to carry
+            # them: a window that stays put while its wall moves is a hole in
+            # the wrong place, and the operator will not notice until the show.
+            "masks": [list(mask.points) for mask in getattr(shape, "masks", [])],
             "center": tuple(shape.center) if isinstance(shape, CircleShape) else None,
             "anchors": list(shape.anchors) if isinstance(shape, CircleShape) else None,
             "radius_x": getattr(shape, "radius_x", 0.0),
@@ -1532,7 +1693,14 @@ class CanvasEditor(QGraphicsView):
         self.project.touch()
         return True
 
+    @staticmethod
+    def _apply_to_masks(shape, state, transform) -> None:
+        """Run a body gesture's point transform over the shape's masks too."""
+        for mask, points in zip(getattr(shape, "masks", []), state.get("masks") or []):
+            mask.points = [transform(x, y) for x, y in points]
+
     def _apply_body_move(self, item, shape, state, dx: float, dy: float) -> None:
+        self._apply_to_masks(shape, state, lambda x, y: (x + dx, y + dy))
         if isinstance(shape, (PolygonShape, MeshShape)):
             shape.points = [(x + dx, y + dy) for x, y in state["points"]]
             item.update_path()
@@ -1550,6 +1718,7 @@ class CanvasEditor(QGraphicsView):
             ox, oy = x - cx, y - cy
             return (cx + ox * cos_a - oy * sin_a, cy + ox * sin_a + oy * cos_a)
 
+        self._apply_to_masks(shape, state, spin)
         if isinstance(shape, (PolygonShape, MeshShape)):
             shape.points = [spin(x, y) for x, y in state["points"]]
             item.update_path()
@@ -1563,6 +1732,9 @@ class CanvasEditor(QGraphicsView):
 
     def _apply_body_scale(self, item, shape, state, factor: float) -> None:
         cx, cy = state["centre"]
+        self._apply_to_masks(
+            shape, state, lambda x, y: (cx + (x - cx) * factor, cy + (y - cy) * factor)
+        )
         if isinstance(shape, (PolygonShape, MeshShape)):
             shape.points = [
                 (cx + (x - cx) * factor, cy + (y - cy) * factor)
@@ -1768,6 +1940,7 @@ class CanvasEditor(QGraphicsView):
         elif isinstance(item, CircleItem):
             self._create_circle_point_handles(item)
             self._update_circle_point_handles(item)
+        self._update_mask_handles(item)
         if item.isSelected():
             for handle in item.handles:
                 handle.setVisible(True)
@@ -1781,6 +1954,7 @@ class CanvasEditor(QGraphicsView):
             self._update_point_handles(item)
         elif isinstance(item, CircleItem):
             self._update_circle_point_handles(item)
+        self._update_mask_handles(item)
         self._update_transform_handles(item)
 
     def _snap_point(self, point: QPointF) -> QPointF:

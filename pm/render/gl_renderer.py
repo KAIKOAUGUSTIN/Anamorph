@@ -41,18 +41,20 @@ from PySide6.QtWidgets import QWidget
 from pm.media.video_player import VideoPlayer
 from pm.model.media import MediaRef
 from pm.model.project import Project
-from pm.model.shapes import CircleShape, MeshShape, PolygonShape, Shape
+from pm.model.shapes import CircleShape, MeshShape, PolygonShape, Shape, active_masks
 from pm.model.output import Output
 from pm.render.fit import content_rect, leaves_unit_square
 from pm.render.homography import canvas_to_uv_matrix, corner_uv_assignment
 from pm.render.mesh import (
     bezier_control_points,
+    circle_ring,
     cubic_point,
     edge_samples,
     mesh_outline,
     tessellate_mesh,
     triangulate_circle,
     triangulate_polygon,
+    triangulate_with_holes,
 )
 from pm.render.test_pattern import GRID, render_test_pattern
 from pm.render.shaders import (
@@ -750,13 +752,16 @@ class GLRenderer(QOpenGLWidget):
         if isinstance(shape, MeshShape):
             positions, _uvs, indices = tessellate_mesh(shape.points, shape.rows, shape.cols)
             return positions, indices
+        holes = active_masks(shape)
         if isinstance(shape, PolygonShape):
             # The curved boundary, when there is one: the fill has to follow
             # the same edge the stroke draws, or the media spills past it.
-            points = shape.outline()
-            indices = triangulate_polygon(points)
-            return points, indices
+            return triangulate_with_holes(shape.outline(), holes)
         if isinstance(shape, CircleShape):
+            if holes:
+                # The ring on its own, not the centre fan: earcut wants a
+                # simple boundary to cut the holes out of.
+                return triangulate_with_holes(circle_ring(shape.center, shape.radius_x, shape.radius_y), holes)
             points, indices = triangulate_circle(shape.center, shape.radius_x, shape.radius_y, 48)
             return points, indices
         return [], []
