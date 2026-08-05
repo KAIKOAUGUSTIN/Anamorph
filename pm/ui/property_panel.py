@@ -25,7 +25,9 @@ from PySide6.QtWidgets import (
 from pm.model.commands import EditSession
 from pm.model.media import MediaRef, SourceRect
 from pm.model.project import Project
-from pm.model.shapes import CircleShape, EdgeVisibility, PolygonShape, Shape
+from pm.model.shapes import (
+    CircleShape, EdgeVisibility, MeshShape, PolygonShape, Shape, mask_from_rect,
+)
 from pm.ui.source_region import SourceRegionPicker
 from pm.ui.widgets import ArrowSlider, ArrowSpinBox
 
@@ -64,6 +66,7 @@ class PropertyPanel(QWidget):
         self._shape: Optional[Shape] = None
         self._updating = False
         self._edge_rows: List[tuple] = []
+        self._mask_rows: List[tuple] = []
         self._project: Optional[Project] = None
         self._session: Optional[EditSession] = None
         self._coord_rows: List[QWidget] = []
@@ -167,11 +170,59 @@ class PropertyPanel(QWidget):
         self.edges_layout.setSpacing(4)
         layout.addWidget(self.edges_group)
 
+        # Masks: the holes a surface does not project into - a window, a
+        # doorway, a pillar standing in front of the wall.
+        self.masks_group = QGroupBox("Masks")
+        masks_outer = QVBoxLayout(self.masks_group)
+        masks_outer.setContentsMargins(8, 8, 8, 8)
+        masks_outer.setSpacing(4)
+        self.masks_layout = QVBoxLayout()
+        self.masks_layout.setContentsMargins(0, 0, 0, 0)
+        self.masks_layout.setSpacing(4)
+        masks_outer.addLayout(self.masks_layout)
+        mask_buttons = QHBoxLayout()
+        self.add_mask_btn = QPushButton("+ Mask")
+        self.add_mask_btn.setToolTip("Cut a hole in this surface; drag the red corners on the canvas")
+        self.remove_mask_btn = QPushButton("- Mask")
+        self.add_mask_btn.clicked.connect(self._on_add_mask)
+        self.remove_mask_btn.clicked.connect(self._on_remove_mask)
+        mask_buttons.addWidget(self.add_mask_btn)
+        mask_buttons.addWidget(self.remove_mask_btn)
+        masks_outer.addLayout(mask_buttons)
+        layout.addWidget(self.masks_group)
+
         # Points section (for circles/polygons)
         self.points_group = QGroupBox("Points")
         points_layout = QVBoxLayout(self.points_group)
         points_layout.setContentsMargins(8, 8, 8, 8)
         points_layout.setSpacing(6)
+
+        # Mesh density. Coarse grids are easier to place; fine grids follow a
+        # tighter curve. Changing it resamples the existing surface rather
+        # than resetting it, so detail can be added late without losing work.
+        self.mesh_row = QWidget()
+        mesh_layout = QHBoxLayout(self.mesh_row)
+        mesh_layout.setContentsMargins(0, 0, 0, 0)
+        mesh_layout.setSpacing(6)
+        rows_label = QLabel("Rows")
+        rows_label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
+        cols_label = QLabel("Cols")
+        cols_label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
+        self.mesh_rows = ArrowSpinBox()
+        self.mesh_cols = ArrowSpinBox()
+        for box in (self.mesh_rows, self.mesh_cols):
+            box.setRange(1, 12)
+            box.setDecimals(0)
+            box.setSingleStep(1.0)
+            box.setFixedWidth(64)
+            box.setFixedHeight(24)
+            box.valueChanged.connect(self._on_mesh_grid_changed)
+        mesh_layout.addWidget(rows_label)
+        mesh_layout.addWidget(self.mesh_rows)
+        mesh_layout.addWidget(cols_label)
+        mesh_layout.addWidget(self.mesh_cols)
+        mesh_layout.addStretch(1)
+        points_layout.addWidget(self.mesh_row)
 
         polygon_buttons = QHBoxLayout()
         self.add_vertex_btn = QPushButton("+ Vertex")
@@ -431,6 +482,7 @@ class PropertyPanel(QWidget):
         if not shape:
             self.setEnabled(False)
             self.edges_group.setVisible(False)
+            self.masks_group.setVisible(False)
             self.points_group.setVisible(False)
             self._updating = False
             return
@@ -443,6 +495,7 @@ class PropertyPanel(QWidget):
         self.opacity_value.setText(f"{int(shape.opacity * 100)}%")
         self.lock_check.setChecked(bool(shape.locked))
         self._populate_edges(shape)
+        self._populate_masks(shape)
         self._update_point_controls(shape)
         self._populate_coords(shape)
         self._update_media(shape.media)
@@ -477,6 +530,13 @@ class PropertyPanel(QWidget):
         """
         if self._session is not None and self._project is not None:
             self._session.commit(self._project, text)
+            # The command restores the shape from a snapshot, which puts a
+            # *new* object in the project. Re-point at it before re-arming, or
+            # every edit after the first one writes to an orphan.
+            if self._shape is not None:
+                current = self._project.get_shape(self._shape.id)
+                if current is not None:
+                    self._shape = current
             self._session.begin(self._shape)
         self.shape_changed.emit()
 
@@ -505,13 +565,20 @@ class PropertyPanel(QWidget):
             slider = ArrowSlider(Qt.Horizontal)
             slider.setRange(0, 100)
             slider.setValue(int(edge.percent * 100))
+            # The discoverable way in to a curved edge; the fast way is
+            # Alt+double-click on the edge itself.
+            curve = QCheckBox("Curve")
+            curve.setChecked(edge.curved)
+            curve.setToolTip("Bend this edge; drag the amber controls on the canvas")
             checkbox.stateChanged.connect(lambda state, i=idx: self._on_edge_visible(i, state))
             slider.valueChanged.connect(lambda value, i=idx: self._on_edge_percent(i, value))
+            curve.stateChanged.connect(lambda state, i=idx: self._on_edge_curved(i, state))
             row_layout.addWidget(checkbox)
             row_layout.addWidget(label)
             row_layout.addWidget(slider, 1)
+            row_layout.addWidget(curve)
             self.edges_layout.addWidget(row)
-            self._edge_rows.append((checkbox, slider))
+            self._edge_rows.append((checkbox, slider, curve))
         self.updateGeometry()
 
     def _clear_coord_rows(self) -> None:
@@ -543,6 +610,12 @@ class PropertyPanel(QWidget):
     def _populate_coords(self, shape: Shape) -> None:
         """One editable X/Y row per vertex, or centre/radius for a circle."""
         self._clear_coord_rows()
+
+        if isinstance(shape, MeshShape):
+            # A 4x4 grid is 25 rows of boxes - the canvas handles are the
+            # usable way in, and the density control is what belongs here.
+            self.updateGeometry()
+            return
 
         if isinstance(shape, PolygonShape):
             for idx, (x, y) in enumerate(shape.points):
@@ -594,6 +667,17 @@ class PropertyPanel(QWidget):
         if shape is None:
             return
 
+        # Undo restores a shape from a snapshot rather than mutating it, so
+        # the object this panel is holding can be an orphan by now. Editing
+        # an orphan writes to nothing the project will ever read.
+        if self._project is not None:
+            current = self._project.get_shape(shape.id)
+            if current is not None and current is not shape:
+                self.set_shape(current)
+                return
+
+        if isinstance(shape, MeshShape):
+            return
         expected = len(shape.points) if isinstance(shape, PolygonShape) else 4
         if len(self._coord_rows) != expected:
             self._updating = True
@@ -689,6 +773,16 @@ class PropertyPanel(QWidget):
                 self._shape.media.source_rect,
             )
 
+    def _on_mesh_grid_changed(self, _value: float) -> None:
+        if self._updating or not isinstance(self._shape, MeshShape):
+            return
+        rows, cols = int(self.mesh_rows.value()), int(self.mesh_cols.value())
+        if (rows, cols) == (self._shape.rows, self._shape.cols):
+            return
+        self._shape.resize_grid(rows, cols)
+        self._populate_coords(self._shape)
+        self._commit("Mesh Density")
+
     def _on_lock_toggled(self, checked: bool) -> None:
         if self._updating or not self._shape:
             return
@@ -712,7 +806,16 @@ class PropertyPanel(QWidget):
         self._commit("Set Circle Geometry")
 
     def _update_point_controls(self, shape: Shape) -> None:
-        if isinstance(shape, CircleShape):
+        self.mesh_row.setVisible(isinstance(shape, MeshShape))
+        if isinstance(shape, MeshShape):
+            self.points_group.setVisible(True)
+            self.add_vertex_btn.setEnabled(False)
+            self.remove_vertex_btn.setEnabled(False)
+            self._updating = True
+            self.mesh_rows.setValue(shape.rows)
+            self.mesh_cols.setValue(shape.cols)
+            self._updating = False
+        elif isinstance(shape, CircleShape):
             # Circles are edited through the four axis handles and the
             # RX/RY boxes; there are no vertices to add or remove.
             self.points_group.setVisible(True)
@@ -786,6 +889,101 @@ class PropertyPanel(QWidget):
         self._shape.ensure_edges()
         self._shape.edges[idx].percent = float(value) / 100.0
         self._commit("Edge Length")
+
+    # --- masks ------------------------------------------------------------
+
+    def _populate_masks(self, shape: Shape) -> None:
+        for i in reversed(range(self.masks_layout.count())):
+            item = self.masks_layout.takeAt(i)
+            widget = item.widget() if item else None
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._mask_rows.clear()
+
+        # A mesh has no masks: cutting a hole means re-triangulating the
+        # boundary, which throws away the grid parametrisation the mesh
+        # exists for.
+        if not hasattr(shape, "masks"):
+            self.masks_group.setVisible(False)
+            self.updateGeometry()
+            return
+
+        self.masks_group.setVisible(True)
+        for idx, mask in enumerate(shape.masks):
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(8)
+            checkbox = QCheckBox()
+            checkbox.setChecked(mask.enabled)
+            checkbox.setToolTip("Turn the hole off without losing where it is")
+            label = QLabel(f"{mask.name} ({len(mask.points)} pts)")
+            label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
+            checkbox.stateChanged.connect(lambda state, i=idx: self._on_mask_enabled(i, state))
+            row_layout.addWidget(checkbox)
+            row_layout.addWidget(label, 1)
+            self.masks_layout.addWidget(row)
+            self._mask_rows.append((checkbox, label))
+        self.remove_mask_btn.setEnabled(bool(shape.masks))
+        self.updateGeometry()
+
+    def _on_mask_enabled(self, idx: int, state: int) -> None:
+        if self._updating or self._shape is None:
+            return
+        masks = getattr(self._shape, "masks", [])
+        if idx >= len(masks):
+            return
+        masks[idx].enabled = state == Qt.Checked.value
+        self._commit("Mask Visibility")
+
+    def _on_add_mask(self) -> None:
+        if self._updating or self._shape is None or not hasattr(self._shape, "masks"):
+            return
+        centre, size = self._mask_placement(self._shape)
+        self._shape.masks.append(
+            mask_from_rect(centre, size[0], size[1], name=f"Mask {len(self._shape.masks) + 1}")
+        )
+        self._populate_masks(self._shape)
+        self._commit("Add Mask")
+
+    def _on_remove_mask(self) -> None:
+        if self._updating or self._shape is None:
+            return
+        masks = getattr(self._shape, "masks", [])
+        if not masks:
+            return
+        masks.pop()
+        self._populate_masks(self._shape)
+        self._commit("Remove Mask")
+
+    @staticmethod
+    def _mask_placement(shape: Shape):
+        """A starter hole in the middle of the surface, scaled to it."""
+        if isinstance(shape, CircleShape):
+            cx, cy = shape.center
+            return (cx, cy), (max(shape.radius_x * 0.6, 20.0), max(shape.radius_y * 0.6, 20.0))
+        points = shape.outline() if isinstance(shape, PolygonShape) else shape.points
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        return (
+            ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0),
+            (max((max(xs) - min(xs)) * 0.3, 20.0), max((max(ys) - min(ys)) * 0.3, 20.0)),
+        )
+
+    def _on_edge_curved(self, idx: int, state: int) -> None:
+        if self._updating or not isinstance(self._shape, PolygonShape):
+            return
+        self._shape.ensure_edges()
+        edge = self._shape.edges[idx]
+        checked = state == Qt.Checked.value
+        if checked == edge.curved:
+            return
+        if checked:
+            self._shape.bow_edge(idx)
+        else:
+            edge.straighten()
+        self._commit("Curve Edge" if checked else "Straighten Edge")
 
     def _on_add_vertex(self) -> None:
         if self._updating or not isinstance(self._shape, PolygonShape):

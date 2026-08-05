@@ -157,12 +157,15 @@ def test_dragging_the_picker_commits_once_on_release(panel):
 
 
 def test_full_frame_button_restores_everything(panel):
-    widget, shape = _with_media(panel)
+    _widget, project = panel
+    widget, _shape = _with_media(panel)
     widget.source_spins[0].setValue(0.4)
 
     widget._on_reset_source_region()
 
-    assert shape.media.source_rect.is_full_frame()
+    # Read through the project: every commit swaps in a restored shape, so
+    # the object the test started with is an orphan by now.
+    assert project.shapes[0].media.source_rect.is_full_frame()
 
 
 def test_picker_is_hidden_for_video(panel):
