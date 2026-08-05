@@ -13,7 +13,7 @@ across the canvas is one undo step, not two hundred.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtGui import QUndoCommand
 
@@ -23,6 +23,7 @@ from pm.model.shapes import Shape, new_shape_id, shape_from_dict, shape_to_dict
 
 SHAPE_EDIT_ID = 1
 OUTPUT_EDIT_ID = 2
+SHAPES_EDIT_ID = 3
 
 # Consecutive edits of the same kind within this window are treated as one
 # gesture. It is what keeps dragging an opacity slider from filling the undo
@@ -119,6 +120,39 @@ def duplicate_shape(shape: Shape, offset: float = 20.0) -> Shape:
     return shape_from_dict(state)
 
 
+class SetGroupCommand(QUndoCommand):
+    """Assigns or clears `group_id` on several shapes as one step.
+
+    Mutates the field in place rather than swapping snapshots in: grouping
+    changes one scalar and must not disturb geometry that another command
+    might be merging at the same moment. It is also the reason this is one
+    command rather than a macro of N - grouping is a single act.
+    """
+
+    def __init__(self, project: Project, assignments: Dict[str, Optional[str]], text: str) -> None:
+        super().__init__(text)
+        self._project = project
+        self._after = dict(assignments)
+        self._before = {
+            shape_id: getattr(project.get_shape(shape_id), "group_id", None)
+            for shape_id in assignments
+            if project.get_shape(shape_id) is not None
+        }
+
+    def _apply(self, values: Dict[str, Optional[str]]) -> None:
+        for shape_id, group_id in values.items():
+            shape = self._project.get_shape(shape_id)
+            if shape is not None:
+                shape.group_id = group_id
+        self._project.touch()
+
+    def undo(self) -> None:
+        self._apply(self._before)
+
+    def redo(self) -> None:
+        self._apply(self._after)
+
+
 class RemoveShapesCommand(QUndoCommand):
     """Deletes shapes, remembering where each sat so undo restores z-order."""
 
@@ -141,50 +175,112 @@ class RemoveShapesCommand(QUndoCommand):
         self._project.touch()
 
 
+class ShapesEditCommand(QUndoCommand):
+    """One undo step covering several shapes - a group gesture.
+
+    Not a macro of `ShapeEditCommand`s: a macro would be N entries the user
+    can only step over together anyway, and `mergeWith` cannot see inside one.
+    Dragging a group of twelve windows is one act and gets one entry.
+    """
+
+    def __init__(
+        self,
+        project: Project,
+        edits: List[Tuple[str, Dict[str, Any], Dict[str, Any]]],
+        text: str,
+    ) -> None:
+        super().__init__(text)
+        self._project = project
+        self._edits = list(edits)
+        self._touched_at = time.monotonic()
+
+    def id(self) -> int:
+        return SHAPES_EDIT_ID
+
+    def mergeWith(self, other: QUndoCommand) -> bool:
+        if not isinstance(other, ShapesEditCommand) or other.text() != self.text():
+            return False
+        if [e[0] for e in other._edits] != [e[0] for e in self._edits]:
+            return False
+        if other._touched_at - self._touched_at > MERGE_WINDOW_SECONDS:
+            return False
+        self._edits = [
+            (shape_id, before, other._edits[index][2])
+            for index, (shape_id, before, _after) in enumerate(self._edits)
+        ]
+        self._touched_at = other._touched_at
+        return True
+
+    def _restore(self, index: int) -> None:
+        for shape_id, *states in self._edits:
+            for position, shape in enumerate(self._project.shapes):
+                if shape.id == shape_id:
+                    self._project.shapes[position] = shape_from_dict(states[index])
+                    break
+        self._project.touch()
+
+    def undo(self) -> None:
+        self._restore(0)
+
+    def redo(self) -> None:
+        self._restore(1)
+
+
 class EditSession:
-    """Captures a shape before an interaction and pushes a command after it.
+    """Captures shapes before an interaction and pushes a command after it.
 
     Drags mutate the model continuously; this is what turns that stream into
     a single undo entry. `begin` is a no-op when a session is already open, so
     nested handlers (a vertex handle inside a shape drag) collapse into one.
+
+    A group gesture snapshots every member, and still commits one step.
     """
 
     def __init__(self, undo_stack) -> None:
         self._stack = undo_stack
-        self._shape_id: Optional[str] = None
-        self._before: Optional[Dict[str, Any]] = None
+        self._before: Dict[str, Dict[str, Any]] = {}
 
     @property
     def active(self) -> bool:
-        return self._before is not None
+        return bool(self._before)
 
     def begin(self, shape: Optional[Shape]) -> None:
-        if shape is None or self.active:
+        self.begin_many([shape] if shape is not None else [])
+
+    def begin_many(self, shapes: List[Optional[Shape]]) -> None:
+        if self.active:
             return
-        self._shape_id = shape.id
-        self._before = shape_to_dict(shape)
+        self._before = {
+            shape.id: shape_to_dict(shape) for shape in shapes if shape is not None
+        }
 
     def commit(self, project: Project, text: str) -> bool:
         """Push the command if anything actually changed. Returns True if so."""
-        before, shape_id = self._before, self._shape_id
+        before = self._before
         self.cancel()
-        if before is None or shape_id is None:
+        if not before:
             return False
 
-        shape = project.get_shape(shape_id)
-        if shape is None:
-            return False
+        edits = []
+        for shape_id, state in before.items():
+            shape = project.get_shape(shape_id)
+            if shape is None:
+                continue
+            after = shape_to_dict(shape)
+            if after != state:
+                edits.append((shape_id, state, after))
 
-        after = shape_to_dict(shape)
-        if after == before:
+        if not edits:
             return False
-
-        self._stack.push(ShapeEditCommand(project, shape_id, before, after, text))
+        if len(edits) == 1:
+            shape_id, state, after = edits[0]
+            self._stack.push(ShapeEditCommand(project, shape_id, state, after, text))
+        else:
+            self._stack.push(ShapesEditCommand(project, edits, text))
         return True
 
     def cancel(self) -> None:
-        self._shape_id = None
-        self._before = None
+        self._before = {}
 
 
 class OutputEditCommand(QUndoCommand):

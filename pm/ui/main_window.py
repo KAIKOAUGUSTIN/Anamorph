@@ -23,9 +23,12 @@ from PySide6.QtWidgets import (
 )
 
 from pm.io.project_io import load_project, save_project
-from pm.model.commands import AddShapeCommand, RemoveShapesCommand, ShapeEditCommand, duplicate_shape
+from pm.model.commands import (
+    AddShapeCommand, RemoveShapesCommand, SetGroupCommand, ShapeEditCommand,
+    duplicate_shape,
+)
 from pm.model.project import Project
-from pm.model.shapes import Shape, shape_to_dict
+from pm.model.shapes import Shape, group_members, new_group_id, shape_to_dict
 from pm.model.output import Output
 from pm.model.project_store import ProjectStore, available_screens, find_screen
 from pm.render.test_pattern import PATTERNS
@@ -180,6 +183,22 @@ class MainWindow(QMainWindow):
         self.addAction(self.action_mask)
         toolbar.addAction(self.action_mask)
 
+        self.action_group = QAction("Group", self)
+        self.action_group.setShortcut(QKeySequence("Ctrl+G"))
+        self.action_group.setShortcutContext(Qt.ApplicationShortcut)
+        self.action_group.setToolTip(
+            "Tie the selected surfaces together so a drag moves them as one\n"
+            "- a window frame, a row of columns (Ctrl+G)"
+        )
+        self.action_ungroup = QAction("Ungroup", self)
+        self.action_ungroup.setShortcut(QKeySequence("Ctrl+Shift+G"))
+        self.action_ungroup.setShortcutContext(Qt.ApplicationShortcut)
+        self.action_ungroup.setToolTip("Break the group apart again (Ctrl+Shift+G)")
+        self.addAction(self.action_group)
+        self.addAction(self.action_ungroup)
+        toolbar.addAction(self.action_group)
+        toolbar.addAction(self.action_ungroup)
+
         toolbar.addSeparator()
 
         self.action_snap = QAction("Snap", self)
@@ -329,6 +348,8 @@ class MainWindow(QMainWindow):
 
         self.action_duplicate.triggered.connect(lambda _checked=False: self._duplicate_selected())
         self.action_mask.triggered.connect(lambda _checked=False: self._mask_selected())
+        self.action_group.triggered.connect(lambda _checked=False: self._group_selected())
+        self.action_ungroup.triggered.connect(lambda _checked=False: self._ungroup_selected())
 
         self.canvas.selection_changed.connect(self._on_canvas_selection)
         self.canvas.zoom_changed.connect(self._on_canvas_zoom_changed)
@@ -493,6 +514,36 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("This surface cannot be masked", 3000)
             return
         self.property_panel.set_shape(self.project.get_shape(item.model.id))
+
+    def _group_selected(self) -> None:
+        """Tie the selected surfaces together. Two is the minimum that means
+        anything - a group of one is just a shape."""
+        ids = self.canvas.selected_shape_ids()
+        if len(ids) < 2:
+            self.statusBar().showMessage("Select two or more surfaces to group", 3000)
+            return
+        group_id = new_group_id()
+        self.undo_stack.push(
+            SetGroupCommand(self.project, {shape_id: group_id for shape_id in ids}, "Group")
+        )
+        self.canvas.select_shape(ids[0])
+
+    def _ungroup_selected(self) -> None:
+        ids = [
+            shape.id
+            for shape_id in self.canvas.selected_shape_ids()
+            for shape in group_members(self.project.shapes, self._group_of(shape_id))
+        ]
+        if not ids:
+            self.statusBar().showMessage("Select a grouped surface to ungroup", 3000)
+            return
+        self.undo_stack.push(
+            SetGroupCommand(self.project, {shape_id: None for shape_id in dict.fromkeys(ids)}, "Ungroup")
+        )
+
+    def _group_of(self, shape_id: str):
+        shape = self.project.get_shape(shape_id)
+        return getattr(shape, "group_id", None) if shape else None
 
     def _on_list_selection(self, shape_id: str) -> None:
         self.canvas.select_shape(shape_id)
