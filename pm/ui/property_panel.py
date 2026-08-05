@@ -151,6 +151,14 @@ class PropertyPanel(QWidget):
         opacity_layout.addWidget(self.opacity_value)
         layout.addWidget(opacity_row)
 
+        # The model has honoured `locked` in the canvas all along; there was
+        # simply no way to switch it on.
+        self.lock_check = QCheckBox("Lock shape")
+        self.lock_check.setStyleSheet(PropertyPanel._CHECKBOX_DIM_STYLE)
+        self.lock_check.setToolTip("Stop this surface being moved or reshaped once it is calibrated.")
+        self.lock_check.toggled.connect(self._on_lock_toggled)
+        layout.addWidget(self.lock_check)
+
         # Edges section (for polygons)
         self.edges_group = QGroupBox("Edges")
         self.edges_layout = QVBoxLayout(self.edges_group)
@@ -395,6 +403,7 @@ class PropertyPanel(QWidget):
         self.stroke_width.setValue(shape.stroke_width)
         self.opacity_slider.setValue(int(shape.opacity * 100))
         self.opacity_value.setText(f"{int(shape.opacity * 100)}%")
+        self.lock_check.setChecked(bool(shape.locked))
         self._populate_edges(shape)
         self._update_point_controls(shape)
         self._populate_coords(shape)
@@ -583,6 +592,14 @@ class PropertyPanel(QWidget):
         points[index] = (point[0], point[1])
         self._shape.points = points
         self._commit("Set Vertex")
+
+    def _on_lock_toggled(self, checked: bool) -> None:
+        if self._updating or not self._shape:
+            return
+        if self._shape.locked == checked:
+            return
+        self._shape.locked = bool(checked)
+        self._commit("Lock" if checked else "Unlock")
 
     def _on_circle_geometry(self, field: str, value: float) -> None:
         if self._updating or not isinstance(self._shape, CircleShape):
