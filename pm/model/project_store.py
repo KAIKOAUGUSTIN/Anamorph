@@ -58,6 +58,12 @@ def find_screen(screen_id: Optional[str]) -> Optional[ScreenInfo]:
     return None
 
 
+def screen_geometry(screen_id: Optional[str]):
+    """The pixel geometry of a screen, or None when it is gone."""
+    info = find_screen(screen_id)
+    return info[3] if info else None
+
+
 class ProjectStore(QObject):
     """Holds the one project and knows where to persist it."""
 

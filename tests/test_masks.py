@@ -209,6 +209,7 @@ def test_a_locked_surface_cannot_be_masked(canvas):
 def test_a_handle_appears_on_every_mask_corner(canvas):
     item, shape = _masked(canvas)
     canvas.select_shape(shape.id)
+    canvas.toggle_handle_mode()
 
     assert len(item.mask_handles) == 4
     assert all(h.isVisible() for h in item.mask_handles)

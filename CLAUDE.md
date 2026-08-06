@@ -45,9 +45,10 @@ python projection_gui.py
   - `property_panel.py` - Property editing UI for selected shape
   - `object_list.py` - Layer list with visibility, lock and group markers, and Solo
   - `source_region.py` - Draggable rectangle over the media thumbnail, for picking the input region
-  - `output_panel.py` - `OutputDialog`: per-projector region, keystone, blend and colour
+  - `output_panel.py` - `OutputDialog`: per-projector region, keystone, blend, colour and the canvas resolution
+  - `help_dialog.py` - The shortcut sheet, non-modal so it can stay open
 - `styles.py` - Studio Dark Luxury theme with cyan accents; provides `STUDIO_DARK_QSS` stylesheet and `COLORS` palette for consistent UI styling
-- `widgets.py` - Custom keyboard-friendly widgets: `ArrowSlider`, `ArrowSpinBox` for arrow key navigation
+- `widgets.py` - Keyboard-friendly widgets: `ArrowSlider`/`ArrowSpinBox` for arrow-key navigation, and a `NoScrollMixin` so the wheel cannot edit a field it merely rolled past
 
 - `pm/render/` - Rendering subsystem
   - `gl_renderer.py` - `QOpenGLWidget` renderer with GLSL shaders; uploads media as GL textures and caches them per path
@@ -97,7 +98,7 @@ python projection_gui.py
 
    The canvas pass inverts Y into the framebuffer, so the output pass samples `1 - v`. Without that the projection comes out vertically mirrored - invisible on a symmetric test pattern.
 
-5. **Gestures, not modes**: There is no Points/Scale/Rotate mode any more - a trip to the toolbar mid-show is a trip nobody has time for. Vertices are always on show for the selected shape, and the body of the shape carries the transforms:
+5. **Gestures, not modes**: There is no Points/Scale/Rotate mode any more - a trip to the toolbar mid-show is a trip nobody has time for. The body of the shape carries the transforms:
    - Drag the body: move. `Shift` locks to one axis
    - `Alt` + drag: rotate about the shape's centre. `Shift` snaps to 15 degree steps
    - `Ctrl` + drag: scale from that centre
@@ -106,6 +107,10 @@ python projection_gui.py
    All three run through `CanvasEditor._update_body_drag` rather than Qt's `ItemIsMovable`, which is what lets `Shift` mean "constrain" instead of "move this time".
 
    A selected shape also gets a dashed bounding box with four `TransformHandle` grips at its corners and a rotate grip above it. They force their own gesture and drive the same `_apply_body_scale`/`_apply_body_rotate` - there is one implementation of each transform, not two. They exist for discoverability: a modifier with no visible affordance is a feature only the manual can tell you about.
+
+   **Two handle sets, never both at once.** The corner grips land exactly on a quad's corner vertices, so showing both makes one of them unreachable. Selection opens in *transform* mode (grips only); clicking the already-selected shape again switches to *point* mode (vertices, curve controls, mask corners) and back. `_handles_visible_for` is the single rule, and it also honours `locked` - the shape refused to move all along, but its handles stayed live, so a calibrated surface could still be reshaped corner by corner.
+
+   A click on a handle is never a click on the body. `_body_item_at` returns None for every handle type; without that, handles parented to a shape item (curve and mask controls) resolved to their parent, the view started a body gesture and swallowed every move event the handle needed. And the view's press handler *returns* instead of falling through to `QGraphicsView`, which would otherwise select the item under the cursor and clear everything else - the reason a Ctrl-built selection, and a group, used to flicker and collapse the moment it was clicked. Clicking empty canvas clears the selection; *dragging* empty canvas pans and keeps it.
 
 6. **Undo**: Commands are snapshot-based (`pm/model/commands.py`), storing a shape's serialised state before and after an edit and swapping them - shapes are mutated in place during a drag, so there is no inverse to replay. `EditSession` snapshots on mouse press and pushes on release, making a drag one undo step; `ShapeEditCommand.mergeWith` collapses same-labelled edits to the same shape within a short window, which is what keeps a slider drag from filling the stack.
 
@@ -139,11 +144,21 @@ python projection_gui.py
 
    Selecting one member selects the whole group, and the bounding box spans it: a group that looked like a single shape until something moved unexpectedly would be worse than no group at all. `Ctrl`+click adds a loose shape to the selection; the layer list numbers each group so membership is legible when a facade has four of them.
 
-10. **Snapping**: `find_snap` (`pm/model/snapping.py`) prefers a vertex, then an edge, then the grid. The dragged shape is excluded from its own candidates - its adjacent edges are zero pixels away and would pin the vertex in place. The threshold is in screen pixels, divided by the zoom before use, so the magnet feels constant to the hand.
+10. **Snapping**: `find_snap` (`pm/model/snapping.py`) prefers a vertex, then an edge, then the grid. Mesh control points pass `grid=False`: the grid is a placement aid for whole surfaces, and on a bend it quantises the one thing a mesh exists to express. The dragged shape is excluded from its own candidates - its adjacent edges are zero pixels away and would pin the vertex in place. The threshold is in screen pixels, divided by the zoom before use, so the magnet feels constant to the hand.
 
 11. **Input space**: `MediaRef.source_rect` (a `SourceRect`) says *which part* of the media feeds a surface, independent of where that surface sits. One clip can drive six surfaces, each taking a different region. It is applied last in the UV chain - after fit, corner pin and `MediaTransform` - in `FRAGMENT_SHADER_TEXTURE`, and mirrored in `canvas_editor._paint_media`. Aspect ratio and pixel offsets are measured against the *region*, not the whole file.
 
    Axis-aligned on purpose: a free quad here would be a second homography stacked on the corner pin, and the real need ("this wall shows the left third") is a rectangle.
+
+### Canvas resolution
+
+`CanvasSettings` starts at 1280x720 and knows it (`is_default()`). Everything -
+the test pattern included - is composited at the canvas resolution before the
+output pass resamples it onto each projector, so leaving the placeholder in
+place while the projector reports 1920x1080 throws away detail nothing
+downstream can put back. The outputs dialog adopts a screen's resolution the
+first time an output is aimed at one, and never touches a size the operator has
+already set. It can also be typed, or matched to the selected projector.
 
 ### File Format
 
@@ -181,6 +196,7 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 - **Snap** - Magnetic snapping of dragged vertices to other surfaces
 - **Project** - Toggle fullscreen projection to selected screen
 - **Test Mode** + pattern dropdown - Replace the output with a calibration pattern
+- **Help** - Every gesture and shortcut on one sheet (`F1`)
 - **Outputs...** - Per-projector calibration: canvas region, keystone, edge blend, colour. `Tile` lays out N projectors pre-overlapped with matching ramps
 
 ### Keyboard Shortcuts
@@ -196,7 +212,9 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 - Double-click an edge - Insert a vertex there
 - `Alt` + double-click an edge - Curve it, or straighten it again
 - `Delete` / `Backspace` - Remove selected shape
+- Click a selected shape again - Swap between the transform grips and its own points
 - `Escape` - Close fullscreen projection window
+- `F1` - Keyboard and mouse reference
 
 ### Supported Media Formats
 - **Images:** PNG, JPG, JPEG, BMP
@@ -228,6 +246,7 @@ pytest
 - `tests/test_bezier_edges.py` - edge-local controls, the straight-by-default invariant, outward bowing, curve handles and hit testing
 - `tests/test_masks.py` - holes cut from the triangulated area, the odd-even preview, masks following the shape, persistence
 - `tests/test_groups.py` - group selection, the shared pivot, one undo step for a group gesture, locked members
+- `tests/test_bugfixes.py` - regressions found by using the app: the missing circle wedge, handles that could not be dragged, selections that collapsed, the two handle sets, type conversion, canvas resolution
 
 Rendering itself is not covered by the suite: `QOpenGLWidget` refuses to create a
 context on the `offscreen` platform. To check the actual output, run under a real

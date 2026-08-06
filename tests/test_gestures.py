@@ -153,13 +153,57 @@ def test_a_gesture_is_one_labelled_undo_step(canvas, modifiers, label):
 
 # --- handles are no longer modal -----------------------------------------
 
-def test_selecting_a_shape_always_shows_its_vertices(canvas):
+def test_a_selected_shape_starts_on_the_transform_grips(canvas):
+    """The grips sit exactly on the corner vertices, so only one set can be
+    live at a time. Selection opens on the grips; the points are a click away."""
     shape = canvas.project.shapes[0]
     canvas.select_shape(shape.id)
     item = canvas.items_by_id[shape.id]
 
+    assert canvas._transform_handles
     assert len(item.handles) == len(QUAD)
+    assert not any(h.isVisible() for h in item.handles)
+
+
+def test_a_second_click_swaps_to_the_vertices(canvas):
+    shape = canvas.project.shapes[0]
+    canvas.select_shape(shape.id)
+    item = canvas.items_by_id[shape.id]
+
+    canvas.toggle_handle_mode()
+
     assert all(h.isVisible() for h in item.handles)
+    assert not canvas._transform_handles, "the grips get out of the way"
+
+    canvas.toggle_handle_mode()
+    assert not any(h.isVisible() for h in item.handles)
+    assert canvas._transform_handles
+
+
+def test_selecting_something_else_goes_back_to_the_grips(canvas):
+    from pm.model.shapes import polygon_from_points
+
+    other = polygon_from_points([(400.0, 400.0), (500.0, 400.0), (500.0, 500.0)])
+    canvas.project.add_shape(other)
+    canvas.select_shape(canvas.project.shapes[0].id)
+    canvas.toggle_handle_mode()
+
+    canvas.select_shape(other.id)
+
+    assert canvas._transform_handles
+    assert not any(h.isVisible() for h in canvas.items_by_id[other.id].handles)
+
+
+def test_a_locked_shape_offers_no_handles_at_all(canvas):
+    """Locking used to stop the body moving and leave the corners draggable."""
+    shape = canvas.project.shapes[0]
+    shape.locked = True
+    canvas.select_shape(shape.id)
+    canvas.toggle_handle_mode()
+    item = canvas.items_by_id[shape.id]
+
+    assert not any(h.isVisible() for h in item.handles)
+    assert not canvas._transform_handles
 
 
 # --- the bounding box is what makes the gestures findable ----------------

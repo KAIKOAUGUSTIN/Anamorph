@@ -41,9 +41,10 @@ class SourceRegionPicker(QWidget):
         self.setMouseTracking(True)
         self.setCursor(Qt.CrossCursor)
 
-    def set_media(self, path: str, region: SourceRect) -> None:
+    def set_media(self, path: Optional[str], region: Optional[SourceRect]) -> None:
+        """`None` clears the picker - there is no shape to show a region for."""
         self._path = path or ""
-        self._region = region.normalised()
+        self._region = (region or SourceRect()).normalised()
         self.update()
 
     def region(self) -> SourceRect:

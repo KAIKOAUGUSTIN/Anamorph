@@ -784,6 +784,8 @@ class CircleItem(QGraphicsEllipseItem):
 class CanvasEditor(QGraphicsView):
     selection_changed = Signal(object)
     zoom_changed = Signal(float)
+    tool_changed = Signal(str)
+    handle_mode_changed = Signal(bool)
 
     # Magnet radius in screen pixels, divided by the zoom before use so it
     # feels constant to the hand rather than to the scene.
@@ -800,6 +802,13 @@ class CanvasEditor(QGraphicsView):
         self.setSceneRect(0, 0, project.canvas.width, project.canvas.height)
         self._zoom = 1.0
         self._padding = 200
+        # Which handles a selected shape offers. The bbox grips land exactly
+        # on the corner vertices of a quad, so both sets cannot be live at the
+        # same time - one of them is unreachable. A second click on the shape
+        # swaps them.
+        self._point_mode = False
+        self._selection_key: Tuple[str, ...] = ()
+        self._pan_origin: Optional[QPointF] = None
         self._last_canvas = (project.canvas.width, project.canvas.height)
         self._panning = False
         self._pan_last: Optional[QPointF] = None
@@ -883,7 +892,7 @@ class CanvasEditor(QGraphicsView):
                 vertices.extend(shape_vertices(shape.anchors))
         return vertices, edges
 
-    def _snap_vertex(self, owner, pos: QPointF) -> QPointF:
+    def _snap_vertex(self, owner, pos: QPointF, grid: bool = True) -> QPointF:
         """snap_func for vertex handles. Alt suppresses it for one drag."""
         if not self.snap_enabled:
             return pos
@@ -900,7 +909,7 @@ class CanvasEditor(QGraphicsView):
             vertices,
             edges,
             threshold,
-            grid_size=self.scene.grid_size,
+            grid_size=self.scene.grid_size if grid else 0.0,
         )
         if result is None:
             self._clear_snap_marker()
@@ -954,6 +963,7 @@ class CanvasEditor(QGraphicsView):
         self._session.commit(self.project, label or "Move Points")
 
     def set_tool(self, tool: str) -> None:
+        changed = tool != self.tool
         self.tool = tool
         if tool == "select":
             self.setDragMode(QGraphicsView.NoDrag)
@@ -962,6 +972,11 @@ class CanvasEditor(QGraphicsView):
             self.setDragMode(QGraphicsView.NoDrag)
             self.viewport().setCursor(Qt.CrossCursor)
         self.setFocus(Qt.OtherFocusReason)
+        if changed:
+            # The canvas drops back to select once a shape is placed. Without
+            # this the toolbar kept the tool button lit, so the next click on
+            # the canvas made a second shape nobody asked for.
+            self.tool_changed.emit(tool)
 
     def set_zoom(self, zoom: float) -> None:
         zoom = max(0.1, min(4.0, zoom))
@@ -1074,7 +1089,11 @@ class CanvasEditor(QGraphicsView):
         for index in range(len(item.model.points)):
             handle = VertexHandle(
                 item, index, self._on_mesh_handle_moved,
-                lambda p, o=item: self._snap_vertex(o, p),
+                # No grid for a mesh control point. The grid is a placement
+                # aid for whole surfaces; on a bend it quantises the one thing
+                # the mesh exists to express, and the points visibly jump
+                # between grid lines instead of following the hand.
+                lambda p, o=item: self._snap_vertex(o, p, grid=False),
             )
             handle.setParentItem(item)
             handle.setVisible(False)
@@ -1087,7 +1106,7 @@ class CanvasEditor(QGraphicsView):
             return
         for handle, point in zip(item.handles, item.model.points):
             handle.set_pos_silent(point[0], point[1])
-        visible = item.isSelected()
+        visible = self._handles_visible_for(item)
         for handle in item.handles:
             handle.setVisible(visible)
 
@@ -1121,10 +1140,11 @@ class CanvasEditor(QGraphicsView):
         for handle, point in zip(item.handles, item.model.points):
             handle.set_pos_silent(point[0], point[1])
         self._apply_corner_roles(item)
-        visible = item.isSelected()
+        visible = self._handles_visible_for(item)
         for handle in item.handles:
             handle.setVisible(visible)
         self._update_curve_handles(item)
+        self._update_mask_handles(item)
 
     # --- masks -----------------------------------------------------------
 
@@ -1156,7 +1176,7 @@ class CanvasEditor(QGraphicsView):
                 handle.setParentItem(item)
                 item.mask_handles.append(handle)
 
-        visible = item.isSelected() and not shape.locked
+        visible = self._handles_visible_for(item)
         for handle in item.mask_handles:
             point = masks[handle.mask_index].points[handle.point_index]
             handle.set_pos_silent(point[0], point[1])
@@ -1238,7 +1258,7 @@ class CanvasEditor(QGraphicsView):
                     handle.setParentItem(item)
                     item.curve_handles.append(handle)
 
-        visible = item.isSelected() and not shape.locked
+        visible = self._handles_visible_for(item)
         count = len(points)
         for handle in item.curve_handles:
             edge = shape.edges[handle.edge_index]
@@ -1372,7 +1392,7 @@ class CanvasEditor(QGraphicsView):
             handle.set_pos_silent(x, y)
             anchors.append((x, y))
         item.model.anchors = anchors
-        visible = item.isSelected()
+        visible = self._handles_visible_for(item)
         for handle in item.handles:
             handle.setVisible(visible)
 
@@ -1518,14 +1538,24 @@ class CanvasEditor(QGraphicsView):
                 # Snapshot before Qt starts delivering move events.
                 self._begin_edit_for(hit_item)
                 self._active_vertex = (hit_item.owner, hit_item.index)
+            elif isinstance(hit_item, (CurveHandle, MaskHandle)):
+                # Same deal, and the handle moves itself from here on.
+                self.setDragMode(QGraphicsView.NoDrag)
+                self._begin_edit_for(hit_item.owner)
+                self._active_vertex = None
             elif body is not None:
                 self.setDragMode(QGraphicsView.NoDrag)
                 # Ctrl adds to the selection; without it, clicking a member
                 # of a group brings the whole group along.
-                if event.modifiers() & Qt.ControlModifier and not self._body_drag:
+                if event.modifiers() & Qt.ControlModifier:
                     self.select_shape(body.model.id, additive=True)
                 elif not body.isSelected():
                     self.select_shape(body.model.id)
+                else:
+                    # Already selected: the second click swaps which handles
+                    # are on offer, because the bbox grips sit exactly on top
+                    # of the corner vertices and one of them has to give way.
+                    self.toggle_handle_mode()
                 self._begin_edit_for(body)
                 self._active_vertex = None
                 # Dragging the body used to need Shift and only ever moved.
@@ -1533,10 +1563,21 @@ class CanvasEditor(QGraphicsView):
                 self._begin_body_drag(
                     body, self.mapToScene(event.position().toPoint()), event.modifiers()
                 )
+                # Qt's own handling would clear the selection down to this one
+                # item, which is what made a Ctrl-built selection - and a
+                # group - flicker and collapse the moment it was clicked.
+                event.accept()
+                return
             else:
+                # Deselect on a *click*, not on a drag: a drag out here is a
+                # pan, and losing the selection every time the view moves is
+                # not what anyone means by scrolling the canvas.
                 self._panning = True
                 self._pan_last = event.position()
+                self._pan_origin = event.position()
                 self.setDragMode(QGraphicsView.NoDrag)
+                event.accept()
+                return
         if event.button() == Qt.LeftButton and self.tool in ("polygon", "circle", "mesh"):
             scene_pos = self._snap_point(self.mapToScene(event.position().toPoint()))
             if self.tool == "polygon":
@@ -1556,8 +1597,16 @@ class CanvasEditor(QGraphicsView):
             return
         super().mousePressEvent(event)
 
+    # Handles parented to a shape item. A click on one of these is a click on
+    # the handle, never on the body underneath - resolving it to the parent is
+    # what made curve and mask controls impossible to drag: the view started a
+    # body gesture and swallowed every move event the handle needed.
+    HANDLE_TYPES = (VertexHandle, CurveHandle, MaskHandle, TransformHandle)
+
     def _body_item_at(self, hit_item):
         """The shape a click landed on, ignoring which child it actually hit."""
+        if isinstance(hit_item, self.HANDLE_TYPES):
+            return None
         if isinstance(hit_item, (PolygonItem, CircleItem, MeshItem)):
             return hit_item
         parent = getattr(hit_item, "parentItem", None)
@@ -1604,10 +1653,21 @@ class CanvasEditor(QGraphicsView):
                     self._session.cancel()
         super().mouseDoubleClickEvent(event)
 
+    # How far the mouse may travel and still count as a click, in screen pixels.
+    CLICK_SLOP_PX = 3.0
+
     def mouseReleaseEvent(self, event) -> None:
         if self._panning and event.button() == Qt.LeftButton:
+            origin = self._pan_origin
             self._panning = False
             self._pan_last = None
+            self._pan_origin = None
+            if (
+                origin is not None
+                and (event.position() - origin).manhattanLength() <= self.CLICK_SLOP_PX
+                and not (event.modifiers() & Qt.ControlModifier)
+            ):
+                self.select_shape(None)
         if self.tool == "select" and event.button() == Qt.LeftButton:
             self.setDragMode(QGraphicsView.NoDrag)
             self._circle_drag_state = {}
@@ -1890,7 +1950,7 @@ class CanvasEditor(QGraphicsView):
 
     def _build_transform_handles(self, item) -> None:
         self._clear_transform_handles()
-        if item is None or item.model.locked:
+        if item is None or item.model.locked or self._point_mode:
             return
         for mode in ("scale", "scale", "scale", "scale", "rotate"):
             handle = TransformHandle(self, item, mode)
@@ -2025,10 +2085,18 @@ class CanvasEditor(QGraphicsView):
             if not selected or selected[0] is not self._active_vertex[0]:
                 self._active_vertex = None
         shapes = [i for i in selected if isinstance(i, (PolygonItem, CircleItem, MeshItem))]
+
+        # A genuinely new selection starts on the transform grips; toggling
+        # back to points is a deliberate second click, not something inherited
+        # from whatever was selected before.
+        key = tuple(sorted(item.model.id for item in shapes))
+        if key != self._selection_key:
+            self._selection_key = key
+            self._point_mode = False
+
         if shapes:
             for item in shapes:
                 self._set_handles_for_item(item)
-                item.set_handles_visible(True)
             # One set of grips around everything selected: a group is dragged
             # as a whole, so the box that says "this is what moves" has to be
             # the whole thing too.
@@ -2037,6 +2105,29 @@ class CanvasEditor(QGraphicsView):
             return
         self._clear_transform_handles()
         self.selection_changed.emit(None)
+
+    def toggle_handle_mode(self) -> None:
+        """Swap between the bounding-box grips and the shape's own points."""
+        self.set_handle_mode(not self._point_mode)
+
+    def set_handle_mode(self, point_mode: bool) -> None:
+        self._point_mode = bool(point_mode)
+        for item in self.scene.selectedItems():
+            if isinstance(item, (PolygonItem, CircleItem, MeshItem)):
+                self._update_mode_handles(item)
+        first = self._current_selected_item()
+        if first is not None:
+            self._build_transform_handles(first)
+        self.handle_mode_changed.emit(self._point_mode)
+
+    def _handles_visible_for(self, item) -> bool:
+        """Points show when the shape is selected, unlocked and in point mode.
+
+        Locked matters: the shape itself refused to move all along, but the
+        handles stayed live, so a calibrated surface could still be reshaped
+        corner by corner.
+        """
+        return bool(item.isSelected() and self._point_mode and not item.model.locked)
 
     def _current_selected_item(self):
         items = self.scene.selectedItems()
@@ -2060,9 +2151,6 @@ class CanvasEditor(QGraphicsView):
             self._create_circle_point_handles(item)
             self._update_circle_point_handles(item)
         self._update_mask_handles(item)
-        if item.isSelected():
-            for handle in item.handles:
-                handle.setVisible(True)
 
     def _update_mode_handles(self, item) -> None:
         if not hasattr(item, "handles"):

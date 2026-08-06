@@ -507,6 +507,78 @@ def mesh_from_rect(
     )
 
 
+def shape_bounds(shape: Any) -> Tuple[float, float, float, float]:
+    """`(min_x, min_y, max_x, max_y)` of a shape's outline."""
+    if isinstance(shape, CircleShape):
+        cx, cy = shape.center
+        rx, ry = max(shape.radius_x, 1.0), max(shape.radius_y, 1.0)
+        return (cx - rx, cy - ry, cx + rx, cy + ry)
+    points = shape.outline() if isinstance(shape, PolygonShape) else list(shape.points)
+    if not points:
+        return (0.0, 0.0, 0.0, 0.0)
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def convert_shape(shape: Shape, target: str) -> Shape:
+    """The same surface as another type, keeping everything but the geometry.
+
+    Type is a decision you make before you know what the wall looks like, and
+    being told to delete and start over means losing the media, the fit mode,
+    the colour and the calibration that came with it. Only the geometry can
+    really carry across, and the honest carrier is the bounding box: a
+    converted surface lands exactly where the old one was and gets re-shaped
+    from there.
+    """
+    target = (target or "").lower()
+    if target == shape.type:
+        return shape
+
+    minx, miny, maxx, maxy = shape_bounds(shape)
+    width = max(maxx - minx, 1.0)
+    height = max(maxy - miny, 1.0)
+    centre = (minx + width / 2.0, miny + height / 2.0)
+
+    if target == "circle":
+        converted: Shape = CircleShape(
+            id=shape.id,
+            name=shape.name,
+            center=centre,
+            radius_x=width / 2.0,
+            radius_y=height / 2.0,
+        )
+    elif target == "mesh":
+        converted = MeshShape(
+            id=shape.id,
+            name=shape.name,
+            rows=2,
+            cols=2,
+            points=_flat_grid((minx, miny), (maxx, maxy), 2, 2),
+        )
+    elif target == "polygon":
+        converted = PolygonShape(
+            id=shape.id,
+            name=shape.name,
+            points=[(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)],
+            edges=[],
+        )
+        converted.ensure_edges()
+    else:
+        return shape
+
+    for field_name in (
+        "fill_color", "stroke_color", "stroke_width", "opacity",
+        "blend_mode", "media", "effects", "visible", "locked", "group_id",
+    ):
+        setattr(converted, field_name, getattr(shape, field_name))
+    # A mesh has no masks to copy into, and a mesh's masks do not exist to
+    # copy out of; anything else keeps its holes where they were.
+    if hasattr(converted, "masks") and hasattr(shape, "masks"):
+        converted.masks = list(shape.masks)
+    return converted
+
+
 def polygon_from_points(points: List[Tuple[float, float]], name: Optional[str] = None) -> PolygonShape:
     shape = PolygonShape(
         id=new_shape_id(),

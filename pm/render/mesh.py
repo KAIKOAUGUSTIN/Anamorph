@@ -253,7 +253,10 @@ def triangulate_circle(
         y = cy + ry * np.sin(angle)
         points.append((float(x), float(y)))
     indices: List[int] = []
-    for i in range(1, segments):
+    # `segments + 1` ring points, the last one repeating the first, so the fan
+    # needs `segments` wedges. Stopping one short left a slice of the circle
+    # missing on the projector - a pie with a piece taken out.
+    for i in range(1, segments + 1):
         indices.extend([0, i, i + 1])
     return points, indices
 

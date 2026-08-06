@@ -235,6 +235,7 @@ def test_selecting_a_mesh_shows_a_handle_per_control_point(canvas):
 
     assert isinstance(item, MeshItem)
     assert len(item.handles) == 9
+    canvas.toggle_handle_mode()
     assert all(h.isVisible() for h in item.handles)
 
 
