@@ -228,6 +228,7 @@ def test_control_handles_appear_only_for_curved_edges(canvas):
     assert item.curve_handles == []
 
     canvas.toggle_edge_curve(item, 2)
+    canvas.toggle_handle_mode()
     canvas._update_point_handles(item)
 
     assert [h.edge_index for h in item.curve_handles] == [2, 2]
