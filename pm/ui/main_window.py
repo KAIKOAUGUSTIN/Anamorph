@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from PySide6.QtCore import Qt, QSize, QStandardPaths
+from PySide6.QtCore import Qt, QSize, QStandardPaths, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QKeySequence, QUndoStack
 from PySide6.QtWidgets import (
     QComboBox,
@@ -41,6 +41,10 @@ from pm.ui.widgets import ArrowSlider, NoScrollComboBox
 
 
 class MainWindow(QMainWindow):
+    # Often enough that a crash costs a moment's work, rarely enough that the
+    # write never lands in the middle of a drag.
+    AUTOSAVE_INTERVAL_MS = 20_000
+
     def __init__(self) -> None:
         super().__init__()
         # One stack per window; cleared when the active project is swapped,
@@ -49,8 +53,17 @@ class MainWindow(QMainWindow):
 
         # One project for the whole rig. Projectors are outputs onto its
         # canvas, not separate workspaces.
+        self._output_preview = None
         self.store = ProjectStore(self)
         self.store.set_base_path(self._get_workspace_base_path())
+
+        # Autosave writes the session copy, never the operator's own file, and
+        # deliberately leaves `dirty` set: the work is safe from a crash but it
+        # has not been saved, and the close prompt still has to say so.
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(self.AUTOSAVE_INTERVAL_MS)
+        self._autosave_timer.timeout.connect(self._autosave)
+        self._autosave_timer.start()
 
         # One projection window per output.
         self._projection_windows: Dict[str, ProjectionWindow] = {}
@@ -199,6 +212,13 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.action_group)
         toolbar.addAction(self.action_ungroup)
 
+        self.action_preview = QAction("Preview", self)
+        self.action_preview.setToolTip(
+            "Watch what a projector shows - region, keystone, blend and colour\n"
+            "- without turning the projector on"
+        )
+        self.addAction(self.action_preview)
+
         self.action_help = QAction("Help", self)
         self.action_help.setShortcut(QKeySequence("F1"))
         self.action_help.setShortcutContext(Qt.ApplicationShortcut)
@@ -223,6 +243,7 @@ class MainWindow(QMainWindow):
             "Calibrate the projectors: canvas region, keystone, edge blend and colour"
         )
         toolbar.addAction(self.action_outputs)
+        toolbar.addAction(self.action_preview)
 
         self.outputs_label = QLabel("")
         self.outputs_label.setStyleSheet("color: #00d4aa; padding: 0 8px;")
@@ -386,6 +407,7 @@ class MainWindow(QMainWindow):
 
         # Screen combo
         self.action_outputs.triggered.connect(lambda _c=False: self._open_output_dialog())
+        self.action_preview.triggered.connect(lambda _c=False: self._show_output_preview())
 
     def _initialize_screens(self) -> None:
         """Load the session project and make sure it has somewhere to project."""
@@ -394,6 +416,11 @@ class MainWindow(QMainWindow):
 
         project = self.store.load()
         self._set_project(project)
+        if self.store.recovered_unsaved:
+            where = project.path or "an unsaved project"
+            self.statusBar().showMessage(
+                f"Recovered unsaved changes to {where} - save to keep them", 12000
+            )
 
         # A project with no output cannot show anything; give it one aimed at
         # whatever display is attached.
@@ -419,9 +446,40 @@ class MainWindow(QMainWindow):
     def _open_output_dialog(self) -> None:
         dialog = OutputDialog(self.project, self.undo_stack, self)
         dialog.outputs_changed.connect(self._on_outputs_changed)
+        dialog.preview_requested.connect(
+            lambda output_id: self._show_output_preview(output_id, parent=dialog)
+        )
+        dialog.output_selected.connect(self._on_output_selected)
         self._output_dialog = dialog
         dialog.exec()
         self._output_dialog = None
+
+    def _on_output_selected(self, output_id) -> None:
+        preview = getattr(self, "_output_preview", None)
+        if preview is not None and preview.isVisible():
+            preview.show_output(output_id)
+
+    def _show_output_preview(self, output_id=None, parent=None) -> None:
+        """Open the live view of one projector.
+
+        Parented to the outputs dialog when it asked, because that dialog is
+        modal and a preview outside it would render but not respond.
+        """
+        from pm.ui.output_preview import OutputPreview
+
+        preview = getattr(self, "_output_preview", None)
+        if preview is not None and parent is not None and preview.parent() is not parent:
+            preview.close()
+            preview = None
+        if preview is None:
+            preview = OutputPreview(self.project, parent or self)
+            self._output_preview = preview
+        preview.refresh()
+        if output_id:
+            preview.show_output(output_id)
+        preview.show()
+        preview.raise_()
+        preview.activateWindow()
 
     def _on_outputs_changed(self) -> None:
         self._update_outputs_label()
@@ -902,6 +960,12 @@ class MainWindow(QMainWindow):
     def _on_primary_screen_changed(self, screen) -> None:
         """Handle primary screen change."""
         self._update_outputs_label()
+
+    def _autosave(self) -> None:
+        """Keep a crash from costing more than the last twenty seconds."""
+        if not self.project.dirty:
+            return
+        self.store.save(mark_saved=False)
 
     def closeEvent(self, event) -> None:
         """Handle app close - save all workspaces."""

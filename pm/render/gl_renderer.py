@@ -44,6 +44,7 @@ from pm.model.project import Project
 from pm.model.shapes import CircleShape, MeshShape, PolygonShape, Shape, active_masks
 from pm.model.output import Output
 from pm.render.fit import content_rect, leaves_unit_square
+from pm.render.geometry_cache import GeometryCache
 from pm.render.homography import canvas_to_uv_matrix, corner_uv_assignment
 from pm.render.mesh import (
     bezier_control_points,
@@ -103,6 +104,9 @@ class GLRenderer(QOpenGLWidget):
         self._video_textures: Dict[str, Tuple[int, Tuple[int, int]]] = {}
         self._test_pattern_texture_id: Optional[int] = None
         self._test_pattern_key: Optional[Tuple] = None
+
+        # Triangles change far less often than frames do.
+        self._geometry = GeometryCache()
 
         # Track initialization
         self._gl_initialized = False
@@ -267,6 +271,8 @@ class GLRenderer(QOpenGLWidget):
             return
 
         now = time.perf_counter() - self._start_time
+        # Deleted surfaces would otherwise keep their triangles alive forever.
+        self._geometry.retain(shape.id for shape in self.project.shapes)
         for shape in self.project.shapes:
             if not shape.visible:
                 continue
@@ -751,32 +757,26 @@ class GLRenderer(QOpenGLWidget):
         glDrawElements(GL_TRIANGLES, len(indices), GL_UNSIGNED_INT, None)
 
     def _shape_geometry(self, shape: Shape) -> Tuple[List[Tuple[float, float]], List[int]]:
-        """Get triangulated geometry for a shape."""
-        if isinstance(shape, MeshShape):
-            positions, _uvs, indices = tessellate_mesh(shape.points, shape.rows, shape.cols)
-            return positions, indices
-        holes = active_masks(shape)
-        if isinstance(shape, PolygonShape):
-            # The curved boundary, when there is one: the fill has to follow
-            # the same edge the stroke draws, or the media spills past it.
-            return triangulate_with_holes(shape.outline(), holes)
-        if isinstance(shape, CircleShape):
-            if holes:
-                # The ring on its own, not the centre fan: earcut wants a
-                # simple boundary to cut the holes out of.
-                return triangulate_with_holes(circle_ring(shape.center, shape.radius_x, shape.radius_y), holes)
-            points, indices = triangulate_circle(shape.center, shape.radius_x, shape.radius_y, 48)
-            return points, indices
-        return [], []
+        """Triangulated geometry for a shape, from the cache when it can be.
+
+        The curved boundary is used for polygons, so the fill follows the same
+        edge the stroke draws; a masked circle goes through its ring rather
+        than the centre fan, because a hole has to be cut out of a simple
+        boundary. Both live in `geometry_cache.build` now.
+        """
+        positions, _uvs, indices = self._geometry.get(shape)
+        return positions, indices
 
     def _mesh_uvs(self, shape: MeshShape) -> List[Tuple[float, float]]:
         """UVs straight from the grid's parametric position.
 
         A bounding-box fit cannot describe a bent surface: the media has to
         flow *along* the mesh, not across the rectangle it happens to occupy.
+        They come out of the same tessellation as the positions - asking for
+        them separately used to tessellate every mesh a second time per frame.
         """
-        _positions, uvs, _indices = tessellate_mesh(shape.points, shape.rows, shape.cols)
-        return uvs
+        _positions, uvs, _indices = self._geometry.get(shape)
+        return uvs or []
 
     def _compute_uvs(
         self,

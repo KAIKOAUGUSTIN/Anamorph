@@ -54,6 +54,8 @@ def _spin(minimum: float, maximum: float, step: float, decimals: int = 3) -> Arr
 
 class OutputDialog(QDialog):
     outputs_changed = Signal()
+    preview_requested = Signal(object)
+    output_selected = Signal(object)
 
     def __init__(self, project: Project, undo_stack, parent=None) -> None:
         super().__init__(parent)
@@ -109,6 +111,15 @@ class OutputDialog(QDialog):
         tile_row.addWidget(self.tile_count)
         tile_row.addWidget(self.tile_btn)
         left.addLayout(tile_row)
+
+        # Everything on this dialog only exists in the output pass. Being able
+        # to watch it while turning the knobs is the difference between
+        # calibrating and guessing.
+        self.preview_btn = QPushButton("Preview output")
+        self.preview_btn.setMinimumHeight(28)
+        self.preview_btn.setToolTip("Watch what this projector shows, without projecting")
+        self.preview_btn.clicked.connect(lambda: self.preview_requested.emit(self._current_output_id()))
+        left.addWidget(self.preview_btn)
         left.addWidget(self._build_canvas_group())
         left.addSpacing(8)
 
@@ -369,9 +380,14 @@ class OutputDialog(QDialog):
         self._updating = False
         self._load_selected()
 
+    def _current_output_id(self):
+        output = self.current_output()
+        return output.id if output is not None else None
+
     def _load_selected(self) -> None:
         output = self.current_output()
         self.editor.setEnabled(output is not None)
+        self.output_selected.emit(output.id if output is not None else None)
         if output is None:
             return
 

@@ -291,6 +291,22 @@ def _catmull_rom(p0: float, p1: float, p2: float, p3: float, t: float) -> float:
     )
 
 
+def _catmull_weights(t: np.ndarray) -> np.ndarray:
+    """The four Catmull-Rom basis weights at each `t`, as an (n, 4) array."""
+    t = np.asarray(t, dtype=np.float64)
+    t2 = t * t
+    t3 = t2 * t
+    return 0.5 * np.stack(
+        [
+            -t + 2.0 * t2 - t3,
+            2.0 - 5.0 * t2 + 3.0 * t3,
+            t + 4.0 * t2 - 3.0 * t3,
+            -t2 + t3,
+        ],
+        axis=-1,
+    )
+
+
 def _clamped(grid: List[List[Tuple[float, float]]], row: int, col: int) -> Tuple[float, float]:
     """Neighbour lookup that repeats the edge instead of wrapping.
 
@@ -347,37 +363,57 @@ def tessellate_mesh(
         return [], [], []
 
     subdivisions = max(1, int(subdivisions))
-    grid = [
-        [points[r * grid_cols + c] for c in range(grid_cols)]
-        for r in range(grid_rows)
-    ]
-
     steps_x = cols * subdivisions
     steps_y = rows * subdivisions
-    positions: List[Tuple[float, float]] = []
-    uvs: List[Tuple[float, float]] = []
 
-    for iy in range(steps_y + 1):
-        gy = iy / subdivisions
-        row = min(int(gy), rows - 1)
-        v_local = gy - row
-        for ix in range(steps_x + 1):
-            gx = ix / subdivisions
-            col = min(int(gx), cols - 1)
-            u_local = gx - col
-            positions.append(_patch_point(grid, row, col, u_local, v_local))
-            uvs.append((ix / steps_x, iy / steps_y))
+    # Vectorised, because this runs for every mesh on every frame. The Python
+    # triple loop it replaces cost about 5ms per mesh - a dozen columns and
+    # the show was under 30fps before the GPU had drawn anything. The maths is
+    # unchanged: a Catmull-Rom patch evaluated at every subdivision point.
+    grid = np.asarray(points, dtype=np.float64).reshape(grid_rows, grid_cols, 2)
 
-    indices: List[int] = []
+    # Which cell each sample falls in, and where inside it.
+    gx = np.arange(steps_x + 1, dtype=np.float64) / subdivisions
+    gy = np.arange(steps_y + 1, dtype=np.float64) / subdivisions
+    col_index = np.minimum(gx.astype(np.int64), cols - 1)
+    row_index = np.minimum(gy.astype(np.int64), rows - 1)
+    u = gx - col_index
+    v = gy - row_index
+
+    # The four control points either side of the span, clamped at the edges so
+    # the surface flattens there instead of wrapping into itself.
+    cols_idx = np.clip(col_index[:, None] + np.arange(-1, 3)[None, :], 0, grid_cols - 1)
+    rows_idx = np.clip(row_index[:, None] + np.arange(-1, 3)[None, :], 0, grid_rows - 1)
+
+    wu = _catmull_weights(u)            # (steps_x + 1, 4)
+    wv = _catmull_weights(v)            # (steps_y + 1, 4)
+
+    # Interpolate along x first: (rows_of_grid, steps_x + 1, 2)
+    along_x = np.einsum("rsjc,sj->rsc", grid[:, cols_idx, :], wu)
+    # Then along y, gathering the four rows each sample needs.
+    stacked = along_x[rows_idx]         # (steps_y + 1, 4, steps_x + 1, 2)
+    grid_points = np.einsum("tjsc,tj->tsc", stacked, wv)
+
+    positions = [(float(x), float(y)) for x, y in grid_points.reshape(-1, 2)]
+
+    us = np.arange(steps_x + 1, dtype=np.float64) / steps_x
+    vs = np.arange(steps_y + 1, dtype=np.float64) / steps_y
+    uv_grid = np.stack(np.broadcast_arrays(us[None, :], vs[:, None]), axis=-1)
+    uvs = [(float(a), float(b)) for a, b in uv_grid.reshape(-1, 2)]
+
     stride = steps_x + 1
-    for iy in range(steps_y):
-        for ix in range(steps_x):
-            top_left = iy * stride + ix
-            top_right = top_left + 1
-            bottom_left = top_left + stride
-            bottom_right = bottom_left + 1
-            indices.extend([top_left, top_right, bottom_right])
-            indices.extend([top_left, bottom_right, bottom_left])
+    top_left = (
+        np.arange(steps_y, dtype=np.int64)[:, None] * stride
+        + np.arange(steps_x, dtype=np.int64)[None, :]
+    )
+    quads = np.stack(
+        [
+            top_left, top_left + 1, top_left + stride + 1,
+            top_left, top_left + stride + 1, top_left + stride,
+        ],
+        axis=-1,
+    )
+    indices = quads.reshape(-1).tolist()
 
     return positions, uvs, indices
 
