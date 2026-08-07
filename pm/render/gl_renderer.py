@@ -397,7 +397,10 @@ class GLRenderer(QOpenGLWidget):
         """Texture for the current calibration pattern, regenerated only when
         the resolution, pattern or screen label actually changes."""
         kind = self.project.ui_state.get("test_pattern", GRID)
-        label = self.project.name or ""
+        # The projector's own name, not the project's. During calibration the
+        # label is how you tell which physical machine you are looking at, and
+        # every one of them saying "Untitled" tells you nothing.
+        label = self.output.name or self.project.name or ""
         key = (int(canvas_w), int(canvas_h), kind, label)
         if self._test_pattern_key == key and self._test_pattern_texture_id:
             return self._test_pattern_texture_id

@@ -22,14 +22,15 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from pm.model.commands import EditSession
+from pm.model.commands import EditSession, ShapeEditCommand
 from pm.model.media import MediaRef, SourceRect
 from pm.model.project import Project
 from pm.model.shapes import (
-    CircleShape, EdgeVisibility, MeshShape, PolygonShape, Shape, mask_from_rect,
+    CircleShape, EdgeVisibility, MeshShape, PolygonShape, Shape, convert_shape,
+    mask_from_rect, shape_to_dict,
 )
 from pm.ui.source_region import SourceRegionPicker
-from pm.ui.widgets import ArrowSlider, ArrowSpinBox
+from pm.ui.widgets import ArrowSlider, ArrowSpinBox, NoScrollComboBox
 
 
 class SectionHeader(QLabel):
@@ -54,6 +55,12 @@ class PropertyPanel(QWidget):
     _CHECKBOX_DIM_STYLE = "QCheckBox { color: #a0a0a0; }"
 
     # (display label, serialised value)
+    SHAPE_TYPES = (
+        ("Polygon", "polygon"),
+        ("Circle", "circle"),
+        ("Mesh", "mesh"),
+    )
+
     FIT_MODES = (
         ("Stretch", "stretch"),
         ("Contain", "contain"),
@@ -69,6 +76,7 @@ class PropertyPanel(QWidget):
         self._mask_rows: List[tuple] = []
         self._project: Optional[Project] = None
         self._session: Optional[EditSession] = None
+        self._stack = None
         self._coord_rows: List[QWidget] = []
 
         layout = QVBoxLayout(self)
@@ -86,6 +94,27 @@ class PropertyPanel(QWidget):
         self.name_edit.setPlaceholderText("Shape name")
         self.name_edit.editingFinished.connect(self._on_name_changed)
         layout.addWidget(self.name_edit)
+
+        # Type. Picked before you know what the wall looks like, so it has to
+        # be changeable afterwards - deleting and redrawing loses the media,
+        # the fit mode and the calibration that came with the surface.
+        type_row = QWidget()
+        type_layout = QHBoxLayout(type_row)
+        type_layout.setContentsMargins(0, 0, 0, 0)
+        type_layout.setSpacing(8)
+        type_label = QLabel("Type")
+        type_label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
+        self.type_combo = NoScrollComboBox()
+        for label, value in PropertyPanel.SHAPE_TYPES:
+            self.type_combo.addItem(label, value)
+        self.type_combo.setToolTip(
+            "Change the surface's type. The new shape keeps its media, colour\n"
+            "and name, and lands on the old one's bounding box."
+        )
+        self.type_combo.currentIndexChanged.connect(self._on_type_changed)
+        type_layout.addWidget(type_label)
+        type_layout.addWidget(self.type_combo, 1)
+        layout.addWidget(type_row)
 
         # Appearance section
         layout.addWidget(SectionHeader("Appearance"))
@@ -281,7 +310,7 @@ class PropertyPanel(QWidget):
         fit_layout.setSpacing(8)
         fit_label = QLabel("Fit Mode")
         fit_label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
-        self.fit_mode = QComboBox()
+        self.fit_mode = NoScrollComboBox()
         # Labels are for humans, userData is what gets serialised - renaming
         # the display text must not invalidate existing .pmap.json files.
         for label, value in self.FIT_MODES:
@@ -480,14 +509,27 @@ class PropertyPanel(QWidget):
             self._session.begin(shape)
         self._updating = True
         if not shape:
+            # Actually blank it. Greying the panel out while it still showed
+            # the deleted surface's name, colours and coordinates read as "this
+            # is still here, just not editable", which is the opposite of true.
             self.setEnabled(False)
+            self.name_edit.clear()
+            self.type_combo.setCurrentIndex(-1)
+            self._clear_coord_rows()
+            self._populate_edges(None)
+            self._populate_masks(None)
             self.edges_group.setVisible(False)
             self.masks_group.setVisible(False)
             self.points_group.setVisible(False)
+            self._update_media(None)
+            self.source_picker.set_media(None, None)
             self._updating = False
+            self.updateGeometry()
             return
         self.setEnabled(True)
         self.name_edit.setText(shape.name)
+        index = self.type_combo.findData(shape.type)
+        self.type_combo.setCurrentIndex(index if index >= 0 else -1)
         self._apply_button_color(self.fill_button, shape.fill_color)
         self._apply_button_color(self.stroke_button, shape.stroke_color)
         self.stroke_width.setValue(shape.stroke_width)
@@ -518,6 +560,7 @@ class PropertyPanel(QWidget):
 
     def set_undo_context(self, project: Project, stack) -> None:
         self._project = project
+        self._stack = stack
         self._session = EditSession(stack)
         self._session.begin(self._shape)
 
@@ -904,7 +947,7 @@ class PropertyPanel(QWidget):
         # A mesh has no masks: cutting a hole means re-triangulating the
         # boundary, which throws away the grid parametrisation the mesh
         # exists for.
-        if not hasattr(shape, "masks"):
+        if shape is None or not hasattr(shape, "masks"):
             self.masks_group.setVisible(False)
             self.updateGeometry()
             return
@@ -970,6 +1013,39 @@ class PropertyPanel(QWidget):
             ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0),
             (max((max(xs) - min(xs)) * 0.3, 20.0), max((max(ys) - min(ys)) * 0.3, 20.0)),
         )
+
+    def _on_type_changed(self, _index: int) -> None:
+        """Swap the surface's type in place, as one undo step."""
+        if self._updating or self._shape is None or self._project is None:
+            return
+        target = self.type_combo.currentData()
+        if not target or target == self._shape.type:
+            return
+
+        converted = convert_shape(self._shape, target)
+        if converted is self._shape:
+            return
+
+        # Straight through a command rather than the usual session: the shape
+        # is replaced outright here, so there is no "mutate then snapshot" to
+        # hang the edit on - the after state has to be handed over directly.
+        before = shape_to_dict(self._shape)
+        after = shape_to_dict(converted)
+        if self._stack is not None:
+            if self._session is not None:
+                self._session.cancel()
+            self._stack.push(
+                ShapeEditCommand(self._project, converted.id, before, after, "Change Type")
+            )
+        else:
+            for index, shape in enumerate(self._project.shapes):
+                if shape.id == converted.id:
+                    self._project.shapes[index] = converted
+                    self._project.touch()
+                    break
+
+        self.set_shape(self._project.get_shape(converted.id))
+        self.shape_changed.emit()
 
     def _on_edge_curved(self, idx: int, state: int) -> None:
         if self._updating or not isinstance(self._shape, PolygonShape):
