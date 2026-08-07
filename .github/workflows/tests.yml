@@ -32,7 +32,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest
+          pip install "pytest>=7"
 
       - name: Run tests
         # conftest.py pins QT_QPA_PLATFORM=offscreen, so no display is needed.
@@ -68,22 +68,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest
+          pip install "pytest>=7"
 
       - name: Run the pixel tests
-        env:
-          QT_QPA_PLATFORM: xcb
-          LIBGL_ALWAYS_SOFTWARE: "1"
-        run: xvfb-run -a pytest tests/test_render_gl.py -q
-
-      - name: Fail if the pixel tests silently skipped
-        # A missing GL library makes every test skip, and a skipped suite is
-        # a green tick that proves nothing. This is the guard for that.
+        # One run, and the guard reads its output: a missing GL library makes
+        # every test skip, and a skipped pixel suite is a green tick that
+        # proves nothing.
         env:
           QT_QPA_PLATFORM: xcb
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
-          xvfb-run -a pytest tests/test_render_gl.py -q --no-header -rN \
-            | tee result.txt
+          set -o pipefail
+          xvfb-run -a pytest tests/test_render_gl.py -q | tee result.txt
           grep -qE "[0-9]+ passed" result.txt
-          ! grep -qE "[0-9]+ skipped" result.txt
+          if grep -qE "[0-9]+ skipped" result.txt; then
+            echo "::error::The pixel tests skipped - there is no usable GL context here."
+            exit 1
+          fi
