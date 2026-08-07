@@ -390,6 +390,13 @@ CI runs the suite twice: once on the `offscreen` platform, and once under
 xvfb+Mesa for `test_render_gl.py`. The second job also fails if those tests
 *skip* - a skipped pixel suite is a green tick that proves nothing.
 
+`pytest.ini` sets `pythonpath = .`, because the repo is not installed as a
+package and `pm` is therefore only importable when the repo root is on
+`sys.path`. Pytest puts it there when invoked with no path argument and *not*
+when invoked as `pytest tests/test_x.py`, so the suite used to pass one way
+and fail to import the other. The two CI jobs now use both invocation forms
+between them, which keeps that from coming back quietly.
+
 `tests/conftest.py` drains Qt's deferred deletions after every test and closes
 the remaining widgets before the QApplication goes away. Without it hundreds of
 never-deleted widgets - some holding GL contexts - piled up and the process
