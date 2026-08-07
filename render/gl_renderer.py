@@ -44,15 +44,15 @@ from PySide6.QtOpenGL import QOpenGLFramebufferObject, QOpenGLFramebufferObjectF
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QWidget
 
-from pm.media.clip_pool import clip_key, clip_pool
-from pm.model.media import MediaRef
-from pm.model.project import Project
-from pm.model.shapes import CircleShape, MeshShape, PolygonShape, Shape, active_masks
-from pm.model.output import Output
-from pm.render.fit import content_rect, leaves_unit_square
-from pm.render.geometry_cache import GeometryCache
-from pm.render.homography import canvas_to_uv_matrix, corner_uv_assignment
-from pm.render.mesh import (
+from media.clip_pool import clip_key, clip_pool
+from model.media import MediaRef
+from model.project import Project
+from model.shapes import CircleShape, MeshShape, PolygonShape, Shape, active_masks
+from model.output import Output
+from render.fit import content_rect, leaves_unit_square
+from render.geometry_cache import GeometryCache
+from render.homography import canvas_to_uv_matrix, corner_uv_assignment
+from render.mesh import (
     bezier_control_points,
     circle_ring,
     cubic_point,
@@ -63,8 +63,8 @@ from pm.render.mesh import (
     triangulate_polygon,
     triangulate_with_holes,
 )
-from pm.render.test_pattern import GRID, render_test_pattern
-from pm.render.shaders import (
+from render.test_pattern import GRID, render_test_pattern
+from render.shaders import (
     FRAGMENT_SHADER_OUTPUT, FRAGMENT_SHADER_SOLID, FRAGMENT_SHADER_STROKE,
     FRAGMENT_SHADER_TEXTURE, VERTEX_SHADER, VERTEX_SHADER_OUTPUT,
 )

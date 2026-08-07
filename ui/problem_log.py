@@ -13,8 +13,8 @@ show, and on screen the surface simply came up empty.
 This is a logging handler rather than a rewrite of every call site. Those
 `logger.warning` calls are already in the right places and already say the
 right thing; what was missing was somewhere for them to arrive. Anything
-logged at WARNING or above under the `pm` package shows up here, which also
-means a problem added later is visible without anyone remembering to wire it.
+this app logs at WARNING or above shows up here, which also means a problem
+added later is visible without anyone remembering to wire it.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import time
 from dataclasses import dataclass
 from typing import List, Optional
 
+from about import PACKAGES
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
@@ -72,20 +73,29 @@ class ProblemLog(QObject):
 
     # --- collection ------------------------------------------------------
 
-    def install(self, logger_name: str = "pm") -> None:
-        """Start listening. Idempotent, so a second window does not double up."""
+    def install(self, logger_name: str = "") -> None:
+        """Start listening. Idempotent, so a second window does not double up.
+
+        The default is the *root* logger. The app's modules are top-level -
+        `ui`, `model`, `render` and the rest - so there is no one ancestor to
+        hang this on any more, and the handler tells the app's own records
+        from a dependency's by their top-level name instead. Passing an
+        explicit logger (which the tests do) skips that filtering: you asked
+        for that subtree, so everything in it is yours.
+        """
         if self._handler is not None:
             return
-        self._handler = _ProblemHandler(self)
+        self._handler = _ProblemHandler(self, filtered=not logger_name)
         self._handler.setLevel(logging.WARNING)
         target = logging.getLogger(logger_name)
         target.addHandler(self._handler)
-        # Without this the root logger's level (WARNING by default, but not
-        # guaranteed) decides what reaches us.
+        # Without this the logger's own level decides what reaches us, and a
+        # level set higher than WARNING would drop records before the handler
+        # is ever consulted.
         if target.level == logging.NOTSET or target.level > logging.WARNING:
             target.setLevel(logging.WARNING)
 
-    def uninstall(self, logger_name: str = "pm") -> None:
+    def uninstall(self, logger_name: str = "") -> None:
         if self._handler is None:
             return
         logging.getLogger(logger_name).removeHandler(self._handler)
@@ -120,11 +130,18 @@ class ProblemLog(QObject):
 
 
 class _ProblemHandler(logging.Handler):
-    def __init__(self, log: ProblemLog) -> None:
+    def __init__(self, log: ProblemLog, filtered: bool = True) -> None:
         super().__init__()
         self._log = log
+        self._filtered = filtered
 
     def emit(self, record: logging.LogRecord) -> None:
+        # On the root logger everything passes through here, including a
+        # dependency's chatter. The operator's list is for this app's
+        # failures - a warning from a decoding library about a colour profile
+        # is not something anyone can act on mid-show.
+        if self._filtered and record.name.split(".")[0] not in PACKAGES:
+            return
         try:
             message = record.getMessage()
         except Exception:  # pragma: no cover - a broken format string

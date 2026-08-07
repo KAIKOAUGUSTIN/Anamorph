@@ -6,10 +6,10 @@
 import pytest
 from PySide6.QtGui import QUndoStack
 
-from pm.io.project_io import load_project, save_project
-from pm.model.media import MediaRef, SourceRect
-from pm.model.project import Project
-from pm.model.shapes import polygon_from_points, shape_from_dict, shape_to_dict
+from fileio.project_io import load_project, save_project
+from model.media import MediaRef, SourceRect
+from model.project import Project
+from model.shapes import polygon_from_points, shape_from_dict, shape_to_dict
 
 QUAD = [(0.0, 0.0), (200.0, 0.0), (200.0, 100.0), (0.0, 100.0)]
 
@@ -90,7 +90,7 @@ def test_region_round_trips_through_shape_serialisation():
 
 
 def test_duplicating_a_shape_carries_the_region():
-    from pm.model.commands import duplicate_shape
+    from model.commands import duplicate_shape
 
     shape = polygon_from_points(list(QUAD))
     shape.media.kind = "image"
@@ -105,7 +105,7 @@ def test_duplicating_a_shape_carries_the_region():
 
 @pytest.fixture
 def panel(qapp):
-    from pm.ui.property_panel import PropertyPanel
+    from ui.property_panel import PropertyPanel
 
     project = Project()
     widget = PropertyPanel()

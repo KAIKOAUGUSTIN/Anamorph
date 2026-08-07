@@ -35,17 +35,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pm.model.commands import (
+from model.commands import (
     AddOutputCommand,
     CanvasSizeCommand,
     OutputSession,
     RemoveOutputCommand,
 )
-from pm.model.media import SourceRect
-from pm.model.output import Output, split_outputs
-from pm.model.project import Project
-from pm.model.project_store import available_screens, screen_geometry
-from pm.ui.widgets import ArrowSpinBox, NoScrollComboBox, NoScrollSpinBox
+from model.media import SourceRect
+from model.output import Output, split_outputs
+from model.project import Project
+from model.project_store import available_screens, screen_geometry
+from ui.widgets import ArrowSpinBox, NoScrollComboBox, NoScrollSpinBox
 
 
 def _spin(minimum: float, maximum: float, step: float, decimals: int = 3) -> ArrowSpinBox:

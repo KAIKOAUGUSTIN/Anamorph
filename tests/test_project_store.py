@@ -7,10 +7,10 @@ import json
 
 import pytest
 
-from pm.model.output import Output
-from pm.model.project import Project
-from pm.model.project_store import LEGACY_WORKSPACE_DIR, PROJECT_FILENAME, ProjectStore
-from pm.model.shapes import polygon_from_points
+from model.output import Output
+from model.project import Project
+from model.project_store import LEGACY_WORKSPACE_DIR, PROJECT_FILENAME, ProjectStore
+from model.shapes import polygon_from_points
 
 QUAD = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
 

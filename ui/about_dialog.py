@@ -10,7 +10,7 @@ Legal Notices. Until now the only statement of licence in the whole project
 was a 674-line file nobody opens; someone running a packaged build would have
 had no way at all to find out what terms they hold it under.
 
-The text itself lives in `pm.about` so this dialog, the README and any future
+The text itself lives in `about` so this dialog, the README and any future
 installer cannot disagree about it.
 """
 
@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from pm.about import (
+from about import (
     APP_NAME,
     HOMEPAGE,
     LICENSE_NAME,

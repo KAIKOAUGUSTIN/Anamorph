@@ -15,10 +15,10 @@ import os
 
 import pytest
 
-from pm.io.media_paths import MAX_PARENT_HOPS, to_absolute, to_portable
-from pm.io.project_io import BACKUP_SUFFIX, load_project, save_project
-from pm.model.project import Project
-from pm.model.shapes import polygon_from_points
+from fileio.media_paths import MAX_PARENT_HOPS, to_absolute, to_portable
+from fileio.project_io import BACKUP_SUFFIX, load_project, save_project
+from model.project import Project
+from model.shapes import polygon_from_points
 
 QUAD = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
 
@@ -183,7 +183,7 @@ def test_no_temporary_file_is_left_behind(tmp_path):
 
 @pytest.fixture
 def store(tmp_path):
-    from pm.model.project_store import ProjectStore
+    from model.project_store import ProjectStore
 
     store = ProjectStore()
     store.set_base_path(str(tmp_path / "appdata"))
@@ -191,7 +191,7 @@ def store(tmp_path):
 
 
 def test_a_restored_session_remembers_which_file_it_came_from(store, tmp_path, qapp):
-    from pm.model.project_store import ProjectStore
+    from model.project_store import ProjectStore
 
     project = Project()
     project.path = str(tmp_path / "show.pmap.json")
@@ -210,7 +210,7 @@ def test_a_restored_session_remembers_which_file_it_came_from(store, tmp_path, q
 
 
 def test_a_clean_session_comes_back_clean(store, tmp_path, qapp):
-    from pm.model.project_store import ProjectStore
+    from model.project_store import ProjectStore
 
     project = Project()
     project.add_shape(polygon_from_points(list(QUAD)))
@@ -226,7 +226,7 @@ def test_a_clean_session_comes_back_clean(store, tmp_path, qapp):
 
 
 def test_an_autosave_comes_back_as_unsaved_work(store, tmp_path, qapp):
-    from pm.model.project_store import ProjectStore
+    from model.project_store import ProjectStore
 
     project = Project()
     project.add_shape(polygon_from_points(list(QUAD), name="wall"))
@@ -269,7 +269,7 @@ def test_a_corrupt_session_falls_back_to_a_fresh_project(store, tmp_path, qapp):
 # --- the window's autosave --------------------------------------------------
 
 def test_the_window_autosaves_without_claiming_the_work_is_saved(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     try:
@@ -286,7 +286,7 @@ def test_the_window_autosaves_without_claiming_the_work_is_saved(qapp):
 
 
 def test_a_clean_project_is_not_written_on_every_tick(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     try:
@@ -306,8 +306,8 @@ def test_a_clean_project_is_not_written_on_every_tick(qapp):
 # --- the output preview -----------------------------------------------------
 
 def _preview(qapp):
-    from pm.model.output import Output
-    from pm.ui.output_preview import OutputPreview
+    from model.output import Output
+    from ui.output_preview import OutputPreview
 
     project = Project()
     project.outputs = [Output(name="Stage Left"), Output(name="Stage Right")]
@@ -344,7 +344,7 @@ def test_the_preview_stays_put_when_following_is_off(qapp):
 
 
 def test_adding_an_output_reaches_the_preview(qapp):
-    from pm.model.output import Output
+    from model.output import Output
 
     preview, project = _preview(qapp)
     try:
@@ -370,7 +370,7 @@ def test_the_preview_says_how_much_canvas_the_output_covers(qapp):
 
 
 def test_a_preview_with_no_outputs_says_so_instead_of_crashing(qapp):
-    from pm.ui.output_preview import OutputPreview
+    from ui.output_preview import OutputPreview
 
     project = Project()
     project.outputs = []

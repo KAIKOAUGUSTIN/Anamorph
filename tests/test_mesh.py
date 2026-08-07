@@ -17,9 +17,9 @@ import pytest
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QUndoStack
 
-from pm.model.project import Project
-from pm.model.shapes import MeshShape, mesh_from_rect, shape_from_dict, shape_to_dict
-from pm.render.mesh import mesh_outline, tessellate_mesh
+from model.project import Project
+from model.shapes import MeshShape, mesh_from_rect, shape_from_dict, shape_to_dict
+from render.mesh import mesh_outline, tessellate_mesh
 
 FLAT = mesh_from_rect((100.0, 100.0), 200.0, rows=2, cols=2)  # 0..200 square
 
@@ -221,7 +221,7 @@ def test_a_truncated_point_list_falls_back_to_a_flat_grid():
 
 @pytest.fixture
 def canvas(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     project.add_shape(mesh_from_rect((100.0, 100.0), 200.0, rows=2, cols=2, name="wall"))
@@ -232,7 +232,7 @@ def canvas(qapp):
 
 
 def test_selecting_a_mesh_shows_a_handle_per_control_point(canvas):
-    from pm.ui.canvas_editor import MeshItem
+    from ui.canvas_editor import MeshItem
 
     mesh = canvas.project.shapes[0]
     canvas.select_shape(mesh.id)
@@ -305,7 +305,7 @@ def test_scaling_a_mesh_scales_every_control_point(canvas):
 
 
 def test_another_shape_can_snap_to_a_mesh_control_point(canvas):
-    from pm.model.shapes import polygon_from_points
+    from model.shapes import polygon_from_points
 
     quad = polygon_from_points([(300.0, 300.0), (400.0, 300.0), (400.0, 400.0), (300.0, 400.0)])
     canvas.project.add_shape(quad)
@@ -325,7 +325,7 @@ def test_a_mesh_does_not_snap_to_itself(canvas):
 
 @pytest.fixture
 def panel(qapp):
-    from pm.ui.property_panel import PropertyPanel
+    from ui.property_panel import PropertyPanel
 
     project = Project()
     mesh = mesh_from_rect((100.0, 100.0), 200.0, rows=2, cols=2)
@@ -338,7 +338,7 @@ def panel(qapp):
 
 
 def test_the_density_control_appears_only_for_meshes(panel):
-    from pm.model.shapes import polygon_from_points
+    from model.shapes import polygon_from_points
 
     widget, _project, _stack, _mesh = panel
     assert widget.mesh_row.isVisibleTo(widget)

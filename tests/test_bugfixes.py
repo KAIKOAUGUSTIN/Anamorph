@@ -15,8 +15,8 @@ import pytest
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QUndoStack
 
-from pm.model.project import CanvasSettings, Project
-from pm.model.shapes import (
+from model.project import CanvasSettings, Project
+from model.shapes import (
     CircleShape,
     MeshShape,
     PolygonShape,
@@ -28,7 +28,7 @@ from pm.model.shapes import (
     shape_from_dict,
     shape_to_dict,
 )
-from pm.render.mesh import triangulate_circle
+from render.mesh import triangulate_circle
 
 QUAD = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
 FAR = [(300.0, 0.0), (400.0, 0.0), (400.0, 100.0), (300.0, 100.0)]
@@ -36,7 +36,7 @@ FAR = [(300.0, 0.0), (400.0, 0.0), (400.0, 100.0), (300.0, 100.0)]
 
 @pytest.fixture
 def canvas(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     project.add_shape(polygon_from_points(list(QUAD), name="wall"))
@@ -69,7 +69,7 @@ def test_a_click_on_a_mask_handle_is_not_a_click_on_the_shape(canvas):
     """The handle is parented to the shape, so the view resolved the press to
     the body, started a move gesture and swallowed every move the handle
     needed."""
-    from pm.ui.canvas_editor import CurveHandle, MaskHandle
+    from ui.canvas_editor import CurveHandle, MaskHandle
 
     item = canvas.items_by_id[canvas.project.shapes[0].id]
     canvas.add_mask(item)
@@ -242,7 +242,7 @@ def test_a_mask_is_dropped_going_to_a_mesh_and_kept_otherwise():
 
 @pytest.fixture
 def panel(qapp):
-    from pm.ui.property_panel import PropertyPanel
+    from ui.property_panel import PropertyPanel
 
     project = Project()
     shape = polygon_from_points(list(QUAD), name="wall")
@@ -289,7 +289,7 @@ def test_clearing_the_panel_actually_blanks_it(panel):
 
 
 def test_deleting_a_shape_clears_the_panel(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     try:
@@ -311,10 +311,10 @@ def test_deleting_a_shape_clears_the_panel(qapp):
 # --- "the output is called Untitled on the test screen" ---------------------
 
 def test_the_test_pattern_is_labelled_with_the_output_name():
-    from pm.render.test_pattern import GRID, render_test_pattern
+    from render.test_pattern import GRID, render_test_pattern
 
     # The renderer feeds `output.name`; this pins the plumbing that reads it.
-    from pm.model.output import Output
+    from model.output import Output
 
     output = Output(name="Stage Left")
     label = output.name or ""
@@ -332,9 +332,9 @@ def test_a_fresh_canvas_knows_it_is_a_placeholder():
 
 
 def test_the_canvas_adopts_the_screen_of_the_output_it_is_aimed_at(qapp):
-    from pm.model.output import Output
-    from pm.model.project_store import available_screens
-    from pm.ui.output_panel import OutputDialog
+    from model.output import Output
+    from model.project_store import available_screens
+    from ui.output_panel import OutputDialog
 
     screens = available_screens()
     if not screens:
@@ -351,9 +351,9 @@ def test_the_canvas_adopts_the_screen_of_the_output_it_is_aimed_at(qapp):
 
 
 def test_a_canvas_the_operator_set_is_never_overwritten(qapp):
-    from pm.model.output import Output
-    from pm.model.project_store import available_screens
-    from pm.ui.output_panel import OutputDialog
+    from model.output import Output
+    from model.project_store import available_screens
+    from ui.output_panel import OutputDialog
 
     screens = available_screens()
     if not screens:
@@ -370,8 +370,8 @@ def test_a_canvas_the_operator_set_is_never_overwritten(qapp):
 
 
 def test_typing_a_canvas_size_reaches_the_project(qapp):
-    from pm.model.output import Output
-    from pm.ui.output_panel import OutputDialog
+    from model.output import Output
+    from ui.output_panel import OutputDialog
 
     project = Project()
     project.outputs = [Output(name="Projector 1")]
@@ -396,7 +396,7 @@ def test_the_canvas_announces_dropping_back_to_select(canvas):
 
 
 def test_the_toolbar_follows_the_canvas_back_to_select(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     try:
@@ -417,7 +417,7 @@ def test_the_toolbar_follows_the_canvas_back_to_select(qapp):
 def test_value_fields_ignore_the_wheel_until_focused(qapp):
     from PySide6.QtCore import QPoint
     from PySide6.QtGui import QWheelEvent
-    from pm.ui.widgets import ArrowSpinBox
+    from ui.widgets import ArrowSpinBox
 
     box = ArrowSpinBox()
     box.setRange(0.0, 100.0)

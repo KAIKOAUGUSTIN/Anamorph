@@ -11,8 +11,8 @@ import logging
 import shutil
 from typing import Any, Dict
 
-from pm.io.media_paths import base_dir_for, rewrite_media_paths, to_absolute, to_portable
-from pm.model.project import Project
+from fileio.media_paths import base_dir_for, rewrite_media_paths, to_absolute, to_portable
+from model.project import Project
 
 logger = logging.getLogger(__name__)
 

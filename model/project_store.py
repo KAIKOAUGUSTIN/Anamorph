@@ -22,9 +22,9 @@ from typing import List, Optional, Tuple
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QGuiApplication
 
-from pm.model.output import Output
-from pm.io.media_paths import base_dir_for, rewrite_media_paths, to_absolute
-from pm.model.project import Project
+from model.output import Output
+from fileio.media_paths import base_dir_for, rewrite_media_paths, to_absolute
+from model.project import Project
 
 logger = logging.getLogger(__name__)
 

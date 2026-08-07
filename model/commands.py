@@ -22,9 +22,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtGui import QUndoCommand
 
-from pm.model.output import Output
-from pm.model.project import Project
-from pm.model.shapes import Shape, new_shape_id, shape_from_dict, shape_to_dict
+from model.output import Output
+from model.project import Project
+from model.shapes import Shape, new_shape_id, shape_from_dict, shape_to_dict
 
 SHAPE_EDIT_ID = 1
 OUTPUT_EDIT_ID = 2

@@ -8,8 +8,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from pm.model.project import Project
-from pm.render.gl_renderer import GLRenderer
+from model.project import Project
+from render.gl_renderer import GLRenderer
 
 
 class ProjectionWindow(QWidget):

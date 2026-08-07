@@ -27,7 +27,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from pm.model.media import SourceRect
+from model.media import SourceRect
 
 Point = Tuple[float, float]
 

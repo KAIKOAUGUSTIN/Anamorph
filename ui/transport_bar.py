@@ -15,8 +15,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
-from pm.model.project import Project
-from pm.ui.widgets import ArrowSpinBox
+from model.project import Project
+from ui.widgets import ArrowSpinBox
 
 
 def format_time(seconds: float) -> str:

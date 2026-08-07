@@ -20,6 +20,11 @@ from __future__ import annotations
 APP_NAME = "Anamorph"
 VERSION = "0.1.0"
 
+# QStandardPaths builds AppDataLocation out of these two, which is why they
+# are set at all: without them the session copy lands in a folder named after
+# whatever interpreter or executable happened to launch the app.
+ORGANIZATION = APP_NAME
+
 AUTHOR = "Kaio Augusto"
 COPYRIGHT_YEARS = "2026"
 COPYRIGHT = f"Copyright (C) {COPYRIGHT_YEARS} {AUTHOR}"
@@ -34,6 +39,26 @@ LICENSE_URL = "https://www.gnu.org/licenses/gpl-3.0.html"
 HOMEPAGE = "https://github.com/KAIKOAUGUSTIN/Anamorph"
 
 TAGLINE = "Projection mapping: one canvas, any number of projectors."
+
+# The application's own top-level modules.
+#
+# These used to live under a single `pm` package, which gave every logger in
+# the app a shared ancestor - `logging.getLogger("pm")` caught all of it and
+# nothing else. Flattening the layout took that ancestor away, so the problem
+# log listens on the *root* logger and uses this list to tell the app's own
+# warnings apart from a dependency's. A new top-level module has to be added
+# here or its failures will not reach the operator.
+PACKAGES = (
+    "about",
+    "app_main",
+    "app_paths",
+    "fileio",
+    "media",
+    "model",
+    "projection_gui",
+    "render",
+    "ui",
+)
 
 WARRANTY = (
     "This program comes with ABSOLUTELY NO WARRANTY, to the extent permitted "

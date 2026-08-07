@@ -8,9 +8,10 @@ from __future__ import annotations
 import sys
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
-from pm.about import APP_NAME, VERSION
-from pm.ui.main_window import MainWindow
-from pm.ui.styles import STUDIO_DARK_QSS
+from about import APP_NAME, ORGANIZATION, VERSION
+from app_paths import remember_legacy_app_data
+from ui.main_window import MainWindow
+from ui.styles import STUDIO_DARK_QSS
 
 
 def run() -> None:
@@ -22,11 +23,15 @@ def run() -> None:
 
     app = QApplication(sys.argv)
 
-    # Display name and version only. `setApplicationName`/`setOrganizationName`
-    # are deliberately left alone: QStandardPaths derives AppDataLocation from
-    # them, so setting them would move the session file out from under anyone
-    # who already has unsaved work there - the crash net would come up empty
-    # exactly once, silently, on the version that "just renamed the app".
+    # Before the rename, not after: QStandardPaths derives AppDataLocation
+    # from the application and organization names, so this is the last moment
+    # the previous location can be computed. `workspace_base_path` carries the
+    # old session across on the first run under the new name - otherwise an
+    # operator with an hour of unsaved work would find the crash net empty.
+    remember_legacy_app_data()
+
+    app.setApplicationName(APP_NAME)
+    app.setOrganizationName(ORGANIZATION)
     app.setApplicationDisplayName(APP_NAME)
     app.setApplicationVersion(VERSION)
 
