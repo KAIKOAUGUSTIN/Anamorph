@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Curved polygon edges.
 
 Arches, vaults and anything projected onto fabric have edges that bend. A

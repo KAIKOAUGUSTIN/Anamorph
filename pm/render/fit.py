@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """How media is placed inside a surface's bounding box.
 
 This lives on its own because two places need the answer and they must never

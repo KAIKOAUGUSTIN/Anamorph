@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Projector outputs onto a single shared canvas.
 
 The canvas is the artwork; an output is one projector's view of part of it.

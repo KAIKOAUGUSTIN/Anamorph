@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeyEvent, QUndoStack

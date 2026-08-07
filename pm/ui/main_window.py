@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 from __future__ import annotations
 
 import logging
@@ -25,6 +30,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from pm.about import APP_NAME
 from pm.io.project_io import load_project, save_project
 from pm.model.commands import (
     AddShapeCommand, RemoveShapesCommand, SetGroupCommand, ShapeEditCommand,
@@ -109,7 +115,7 @@ class MainWindow(QMainWindow):
         return str(base)
 
     def _build_ui(self) -> None:
-        self.setWindowTitle("Anamorph")
+        self.setWindowTitle(APP_NAME)
         screen = QGuiApplication.primaryScreen()
         if screen:
             available = screen.availableGeometry()
@@ -401,6 +407,15 @@ class MainWindow(QMainWindow):
         edit_menu.addSeparator()
         edit_menu.addAction(self.action_delete)
 
+        # The About box is where this program states its licence. Without it a
+        # packaged build would carry no notice at all - the LICENSE file does
+        # not travel into a frozen binary on its own.
+        help_menu = self.menuBar().addMenu("Help")
+        self.action_about = QAction(f"About {APP_NAME}", self)
+        help_menu.addAction(self.action_help)
+        help_menu.addSeparator()
+        help_menu.addAction(self.action_about)
+
         # Status bar with styled mode indicator
         self.mode_label = QLabel("DRAG MOVE · ALT ROTATE · CTRL SCALE")
         self.mode_label.setStyleSheet("""
@@ -451,6 +466,7 @@ class MainWindow(QMainWindow):
         self.action_group.triggered.connect(lambda _checked=False: self._group_selected())
         self.action_ungroup.triggered.connect(lambda _checked=False: self._ungroup_selected())
         self.action_help.triggered.connect(lambda _checked=False: self._show_help())
+        self.action_about.triggered.connect(lambda _checked=False: self._show_about())
         self.transport_bar.changed.connect(self.canvas.viewport().update)
 
         self.action_play_pause = QAction("Play/Pause", self)
@@ -746,6 +762,11 @@ class MainWindow(QMainWindow):
         self._help_dialog.show()
         self._help_dialog.raise_()
         self._help_dialog.activateWindow()
+
+    def _show_about(self) -> None:
+        from pm.ui.about_dialog import AboutDialog
+
+        AboutDialog(self).exec()
 
     def _group_selected(self) -> None:
         """Tie the selected surfaces together. Two is the minimum that means

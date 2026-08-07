@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Deformation mesh: a surface that bends between its corners.
 
 Corner pin describes a flat plane seen off-axis. A column, a dome or a hung

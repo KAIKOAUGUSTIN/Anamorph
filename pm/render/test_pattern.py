@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Calibration patterns for aligning a projector before any mapping starts.
 
 The physical setup comes first: focus the lens, square the projector to the

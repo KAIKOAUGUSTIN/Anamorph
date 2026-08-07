@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Which media a project can actually find.
 
 A missing file used to be silent: `get_qimage` returned None, the decoder

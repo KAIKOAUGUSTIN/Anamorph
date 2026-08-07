@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Picker for the slice of media that feeds a surface.
 
 Shows the media with a draggable rectangle over it. Dragging inside moves the

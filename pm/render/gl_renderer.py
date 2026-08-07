@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """OpenGL-based renderer using PyOpenGL and QOpenGLWidget."""
 
 from __future__ import annotations
