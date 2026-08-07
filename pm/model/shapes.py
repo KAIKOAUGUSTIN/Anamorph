@@ -8,6 +8,16 @@ from pm.model.effects import Effects
 from pm.model.media import MediaRef
 
 
+# A new surface's name. The interface is in English, and these were the last
+# strings that were not - a surface called "Polígono" sitting in a panel
+# labelled "Name" reads as a bug rather than as a choice. Existing projects
+# are unaffected: a shape's name is stored with the shape, so anything already
+# drawn keeps what it was called.
+DEFAULT_POLYGON_NAME = "Polygon"
+DEFAULT_CIRCLE_NAME = "Circle"
+DEFAULT_MESH_NAME = "Mesh"
+
+
 def new_shape_id() -> str:
     return uuid.uuid4().hex[:8]
 
@@ -265,7 +275,7 @@ class PolygonShape:
         edges = [EdgeVisibility.from_dict(e) for e in data.get("edges", [])]
         shape = cls(
             id=data.get("id", new_shape_id()),
-            name=data.get("name", "Polígono"),
+            name=data.get("name", DEFAULT_POLYGON_NAME),
             points=points,
             edges=edges,
             **_common_shape_kwargs(data),
@@ -318,7 +328,7 @@ class CircleShape:
             radius_y = radius_y if radius_y is not None else radius_val
         shape = cls(
             id=data.get("id", new_shape_id()),
-            name=data.get("name", "Círculo"),
+            name=data.get("name", DEFAULT_CIRCLE_NAME),
             center=(float(center.get("x", 0.0)), float(center.get("y", 0.0))),
             radius_x=float(radius_x),
             radius_y=float(radius_y),
@@ -439,7 +449,7 @@ class MeshShape:
             points = _flat_grid((0.0, 0.0), (200.0, 200.0), rows, cols)
         return cls(
             id=data.get("id", new_shape_id()),
-            name=data.get("name", "Malha"),
+            name=data.get("name", DEFAULT_MESH_NAME),
             rows=rows,
             cols=cols,
             points=points,
@@ -500,7 +510,7 @@ def mesh_from_rect(
     cx, cy = center
     return MeshShape(
         id=new_shape_id(),
-        name=name or "Malha",
+        name=name or DEFAULT_MESH_NAME,
         rows=max(1, rows),
         cols=max(1, cols),
         points=_flat_grid((cx - half, cy - half), (cx + half, cy + half), max(1, rows), max(1, cols)),
@@ -582,7 +592,7 @@ def convert_shape(shape: Shape, target: str) -> Shape:
 def polygon_from_points(points: List[Tuple[float, float]], name: Optional[str] = None) -> PolygonShape:
     shape = PolygonShape(
         id=new_shape_id(),
-        name=name or "Polígono",
+        name=name or DEFAULT_POLYGON_NAME,
         points=points,
         edges=[EdgeVisibility() for _ in range(len(points))],
     )
@@ -600,7 +610,7 @@ def circle_from_center(center: Tuple[float, float], radius: float, name: Optiona
     ]
     return CircleShape(
         id=new_shape_id(),
-        name=name or "Círculo",
+        name=name or DEFAULT_CIRCLE_NAME,
         center=center,
         radius_x=radius,
         radius_y=radius,

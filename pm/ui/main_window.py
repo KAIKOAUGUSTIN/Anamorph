@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from typing import Dict, Optional
 
 from PySide6.QtCore import Qt, QSize, QStandardPaths, QTimer
@@ -37,10 +39,14 @@ from pm.render.test_pattern import PATTERNS
 from pm.ui.canvas_editor import CanvasEditor
 from pm.ui.output_panel import OutputDialog
 from pm.ui.object_list import ObjectList
+from pm.ui.problem_log import ProblemLog
 from pm.ui.transport_bar import TransportBar
 from pm.ui.property_panel import PropertyPanel
 from pm.ui.projection_window import ProjectionWindow
 from pm.ui.widgets import ArrowSlider, NoScrollComboBox
+
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -57,6 +63,15 @@ class MainWindow(QMainWindow):
         # One project for the whole rig. Projectors are outputs onto its
         # canvas, not separate workspaces.
         self._output_preview = None
+
+        # Warnings and errors used to end at a console nobody is watching.
+        # Installed before anything else here, so a failure during startup -
+        # a session file that will not parse, a driver that refuses - is
+        # caught rather than missed.
+        self.problem_log = ProblemLog(self)
+        self.problem_log.install()
+        self.problem_log.problem_added.connect(self._on_problem)
+
         self.store = ProjectStore(self)
         self.store.set_base_path(self._get_workspace_base_path())
 
@@ -94,7 +109,7 @@ class MainWindow(QMainWindow):
         return str(base)
 
     def _build_ui(self) -> None:
-        self.setWindowTitle("PROJECTION MAPPER")
+        self.setWindowTitle("Anamorph")
         screen = QGuiApplication.primaryScreen()
         if screen:
             available = screen.availableGeometry()
@@ -276,6 +291,15 @@ class MainWindow(QMainWindow):
         self.missing_button.clicked.connect(lambda: self._open_relink_dialog())
         toolbar.addWidget(self.missing_button)
 
+        # Sits next to the missing-media count, and stays out of the way until
+        # there is something to say.
+        self.problems_button = QPushButton()
+        self.problems_button.setObjectName("warningButton")
+        self.problems_button.setFlat(True)
+        self.problems_button.setVisible(False)
+        self.problems_button.clicked.connect(lambda: self._open_problem_dialog())
+        toolbar.addWidget(self.problems_button)
+
         toolbar.addSeparator()
 
         # Projection controls
@@ -341,6 +365,19 @@ class MainWindow(QMainWindow):
         self.action_open = QAction("Open...", self)
         self.action_save = QAction("Save", self)
         self.action_save_as = QAction("Save As...", self)
+
+        # These were menu items with no keys behind them, while the help sheet
+        # has been promising them all along - the app was telling the operator
+        # something that was not true.
+        for action, sequence in (
+            (self.action_new, QKeySequence.New),
+            (self.action_open, QKeySequence.Open),
+            (self.action_save, QKeySequence.Save),
+            (self.action_save_as, QKeySequence.SaveAs),
+        ):
+            action.setShortcut(sequence)
+            action.setShortcutContext(Qt.ApplicationShortcut)
+            self.addAction(action)
         file_menu.addAction(self.action_new)
         file_menu.addAction(self.action_open)
         file_menu.addAction(self.action_save)
@@ -480,6 +517,43 @@ class MainWindow(QMainWindow):
 
         self._update_outputs_label()
         self.canvas.fit_to_canvas()
+
+    def _report_failure(self, what: str, path: str, exc: Exception) -> None:
+        """Say it in a box, and keep it in the list.
+
+        The box is what stops the operator carrying on as if it worked; the
+        list is what they can still read ten minutes later when they wonder
+        what that message said.
+        """
+        detail = f"{what}:\n{path}\n\n{exc}"
+        logger.error("%s: %s (%s)", what, path, exc)
+        box = self._styled_message_box(
+            "Error", detail, QMessageBox.Critical, QMessageBox.Ok, QMessageBox.Ok
+        )
+        box.exec()
+
+    def _on_problem(self, problem) -> None:
+        """Say it once in the status bar, and keep it in the list."""
+        self._refresh_problems_button()
+        self.statusBar().showMessage(problem.message, 8000 if problem.is_error else 5000)
+
+    def _refresh_problems_button(self) -> None:
+        count = self.problem_log.count()
+        self.problems_button.setVisible(bool(count))
+        if count:
+            errors = self.problem_log.error_count()
+            self.problems_button.setText(f"{'✕' if errors else '⚠'} {count} problem(s)")
+            latest = self.problem_log.latest()
+            self.problems_button.setToolTip(
+                (latest.message if latest else "") + "\n\nClick for the full list."
+            )
+
+    def _open_problem_dialog(self) -> None:
+        from pm.ui.problem_log import ProblemDialog
+
+        dialog = ProblemDialog(self.problem_log, self)
+        dialog.exec()
+        self._refresh_problems_button()
 
     def _open_relink_dialog(self) -> None:
         from pm.ui.relink_dialog import RelinkDialog
@@ -820,7 +894,7 @@ class MainWindow(QMainWindow):
         try:
             project = load_project(path)
         except Exception as exc:
-            QMessageBox.critical(self, "Error", f"Failed to open project: {exc}")
+            self._report_failure("Could not open project", path, exc)
             return
         self._adopt_project(project)
 
@@ -833,7 +907,10 @@ class MainWindow(QMainWindow):
         try:
             save_project(self.project, path)
         except Exception as exc:
-            QMessageBox.critical(self, "Error", f"Failed to save project: {exc}")
+            # Modal on purpose. Everything else can be a status message the
+            # operator catches up with; a save that did not happen is the one
+            # they have to know about before doing anything else.
+            self._report_failure("Could not save project", path, exc)
 
     def _project_slots(self):
         """Everything that has to follow the active project. Connected and
