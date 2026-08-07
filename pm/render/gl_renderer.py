@@ -232,6 +232,15 @@ class GLRenderer(QOpenGLWidget):
             return
 
         try:
+            if self.project.blackout:
+                # The shortest path there is: nothing downstream runs, so
+                # nothing - not the canvas, not the test pattern, not a
+                # half-finished edit - can leak onto the wall.
+                glBindFramebuffer(GL_FRAMEBUFFER, self.defaultFramebufferObject())
+                glClearColor(0.0, 0.0, 0.0, 1.0)
+                glClear(GL_COLOR_BUFFER_BIT)
+                return
+
             canvas_w = max(self.project.canvas.width, 1)
             canvas_h = max(self.project.canvas.height, 1)
 

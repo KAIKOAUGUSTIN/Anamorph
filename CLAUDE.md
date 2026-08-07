@@ -49,6 +49,7 @@ python projection_gui.py
   - `output_panel.py` - `OutputDialog`: per-projector region, keystone, blend, colour and the canvas resolution
   - `help_dialog.py` - The shortcut sheet, non-modal so it can stay open
   - `transport_bar.py` - Play/pause, restart and rate, in the toolbar
+  - `relink_dialog.py` - Point the project at media that has moved, by folder
   - `output_preview.py` - Live view of one projector's frame, through its own calibration
 - `styles.py` - Studio Dark Luxury theme with cyan accents; provides `STUDIO_DARK_QSS` stylesheet and `COLORS` palette for consistent UI styling
 - `widgets.py` - Keyboard-friendly widgets: `ArrowSlider`/`ArrowSpinBox` for arrow-key navigation, and a `NoScrollMixin` so the wheel cannot edit a field it merely rolled past
@@ -63,6 +64,7 @@ python projection_gui.py
   - `mesh.py` - All the CPU-side geometry: earcut triangulation with holes (`triangulate_with_holes`), the Catmull-Rom patch behind `MeshShape` (`tessellate_mesh`/`mesh_outline`), and the cubic-edge sampling behind curved polygons (`bezier_control_points`/`polygon_outline`)
 
 - `pm/media/` - Media handling
+  - `availability.py` - Which media the project can actually find, cached briefly
   - `clip_pool.py` - Every open decoder, shared and keyed by what it is playing; the show clock drives them
   - `image_cache.py` - mtime-keyed QImage cache for the editor viewport (paint runs every frame)
 
@@ -154,6 +156,27 @@ python projection_gui.py
 11. **Input space**: `MediaRef.source_rect` (a `SourceRect`) says *which part* of the media feeds a surface, independent of where that surface sits. One clip can drive six surfaces, each taking a different region. It is applied last in the UV chain - after fit, corner pin and `MediaTransform` - in `FRAGMENT_SHADER_TEXTURE`, and mirrored in `canvas_editor._paint_media`. Aspect ratio and pixel offsets are measured against the *region*, not the whole file.
 
    Axis-aligned on purpose: a free quad here would be a second homography stacked on the corner pin, and the real need ("this wall shows the left third") is a rectangle.
+
+### Blackout, and missing media
+
+`Project.blackout` is the panic button and short-circuits `paintGL` before
+anything else runs - not the canvas, not the test pattern, not a half-finished
+edit can reach the wall. It is deliberately **not** `pause`: pausing leaves the
+last frame up, and what you need when something goes wrong is darkness. It is
+also deliberately not serialised, and does not dirty the project: a show that
+opens black sends the operator hunting for why nothing is on the wall.
+
+The editor keeps working during a blackout, so it draws a red frame around the
+canvas to say the projectors are dark.
+
+A missing file used to be silent - the surface simply came up empty, which in
+a dark room reads as "I mapped it wrong" rather than "the drive is not
+plugged in". `pm/media/availability.py` answers the question with a one-second
+cache, because it is asked once per layer-list repaint and a `stat` per surface
+has no business in the frame budget. Broken surfaces are hatched in red on the
+canvas, marked in the layer list, and counted in the toolbar; the count opens
+`RelinkDialog`, which relinks **by folder** - media moves by the folder, so
+pointing at one file's new home is taken as an offer to find its neighbours.
 
 ### Media playback
 
@@ -286,6 +309,7 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 - **Snap** - Magnetic snapping of dragged vertices to other surfaces
 - **Project** - Toggle fullscreen projection to selected screen
 - **Test Mode** + pattern dropdown - Replace the output with a calibration pattern
+- **Blackout** - Kill every projector at once, without stopping the show (`B`)
 - **Help** - Every gesture and shortcut on one sheet (`F1`)
 - **Preview** - Watch one projector's frame - region, keystone, blend, colour - without projecting
 - **Outputs...** - Per-projector calibration: canvas region, keystone, edge blend, colour. `Tile` lays out N projectors pre-overlapped with matching ramps
@@ -306,6 +330,7 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 - Click a selected shape again - Swap between the transform grips and its own points
 - `Escape` - Close fullscreen projection window
 - `Space` - Play or pause the whole show
+- `B` - Blackout: kill every projector at once
 - `F1` - Keyboard and mouse reference
 
 ### Supported Media Formats
@@ -344,6 +369,7 @@ pytest
 - `tests/test_project_files.py` - relative media paths, backups, atomic writes, session recovery, the output preview
 - `tests/test_performance.py` - the geometry cache's hit/miss behaviour and per-frame budgets
 - `tests/test_playback.py` - the show clock, decoder sharing, loop/offset/rate, the transport bar
+- `tests/test_showtime.py` - blackout, missing-media detection, relinking, the undo gaps
 - `tests/test_render_gl.py` - **pixels**: what actually lands on the projector
 
 `test_render_gl.py` needs a real GL context, which the `offscreen` platform
@@ -356,8 +382,20 @@ xvfb-run -a env QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 pytest
 It covers the failures that live in the gap between the numbers and the frame:
 the canvas Y flip, stroke width, a mask cut out of the geometry but not the
 image, a circle that does not close, `contain` smearing instead of
-letterboxing, the output pass (region crop, blend ramp, colour) and the four
-blend modes. Each one was verified to fail when its fix is reverted.
+letterboxing, the output pass (region crop, blend ramp, colour), the four
+blend modes and the blackout. Each one was verified to fail when its fix is
+reverted.
+
+CI runs the suite twice: once on the `offscreen` platform, and once under
+xvfb+Mesa for `test_render_gl.py`. The second job also fails if those tests
+*skip* - a skipped pixel suite is a green tick that proves nothing.
+
+`pytest.ini` sets `pythonpath = .`, because the repo is not installed as a
+package and `pm` is therefore only importable when the repo root is on
+`sys.path`. Pytest puts it there when invoked with no path argument and *not*
+when invoked as `pytest tests/test_x.py`, so the suite used to pass one way
+and fail to import the other. The two CI jobs now use both invocation forms
+between them, which keeps that from coming back quietly.
 
 `tests/conftest.py` drains Qt's deferred deletions after every test and closes
 the remaining widgets before the QApplication goes away. Without it hundreds of

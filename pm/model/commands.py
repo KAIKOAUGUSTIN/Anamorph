@@ -153,6 +153,67 @@ class SetGroupCommand(QUndoCommand):
         self._apply(self._after)
 
 
+class CanvasSizeCommand(QUndoCommand):
+    """Resize the canvas, undoably.
+
+    It was the one edit that changed how the whole show is composited and
+    could not be taken back - and it is the easiest thing to get wrong,
+    because the outputs dialog adopts a screen's resolution on its own.
+    """
+
+    def __init__(self, project: Project, width: int, height: int, text: str = "Canvas Size") -> None:
+        super().__init__(text)
+        self._project = project
+        self._after = (max(1, int(width)), max(1, int(height)))
+        self._before = (project.canvas.width, project.canvas.height)
+
+    def _apply(self, size: Tuple[int, int]) -> None:
+        self._project.canvas.width, self._project.canvas.height = size
+        self._project.touch()
+
+    def undo(self) -> None:
+        self._apply(self._before)
+
+    def redo(self) -> None:
+        self._apply(self._after)
+
+
+class RelinkMediaCommand(QUndoCommand):
+    """Repoint every surface using a moved file.
+
+    Stored as the mapping rather than as shape snapshots: relinking touches
+    only paths, and a snapshot would also roll back whatever else was edited
+    between the relink and the undo.
+    """
+
+    def __init__(self, project: Project, mapping: Dict[str, str], text: str = "Relink Media") -> None:
+        super().__init__(text)
+        self._project = project
+        self._forward = dict(mapping)
+        self._backward = {new: old for old, new in mapping.items()}
+        self.changed = 0
+
+    def _apply(self, mapping: Dict[str, str]) -> int:
+        changed = 0
+        for shape in self._project.shapes:
+            media = getattr(shape, "media", None)
+            if media is not None and media.path in mapping:
+                media.path = mapping[media.path]
+                changed += 1
+        self._project.media_library = [
+            mapping.get(entry, entry) for entry in self._project.media_library
+        ]
+        if changed:
+            self._project.touch()
+        return changed
+
+    def undo(self) -> None:
+        self._apply(self._backward)
+
+    def redo(self) -> None:
+        self.changed = self._apply(self._forward)
+
+
 class RemoveShapesCommand(QUndoCommand):
     """Deletes shapes, remembering where each sat so undo restores z-order."""
 

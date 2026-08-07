@@ -61,12 +61,28 @@ class Project(QObject):
         # what makes two surfaces on the same file frame-accurate and what
         # lets one button stop the whole show.
         self.transport = Transport()
+        # The panic button. Not serialised on purpose: a project that opens
+        # black leaves the operator hunting for why nothing is on the wall,
+        # and blackout is a live-operation state like the playhead, not a
+        # property of the artwork.
+        self.blackout: bool = False
         self.ui_state: Dict[str, Any] = {"last_projection_screen_id": None, "test_mode": False}
         self.path: Optional[str] = None
         self.name: str = "Untitled"
         # Every mutation routes through touch(), so this stays honest without
         # anyone having to remember to set it.
         self.dirty: bool = False
+
+    def set_blackout(self, value: bool) -> None:
+        """Kill or restore every projector at once."""
+        value = bool(value)
+        if value == self.blackout:
+            return
+        self.blackout = value
+        # Straight to `changed`, without `touch`: blacking out is not an edit
+        # to the show, and marking the project dirty would ask the operator to
+        # save a state that is deliberately not saved.
+        self.changed.emit()
 
     def touch(self) -> None:
         self.dirty = True

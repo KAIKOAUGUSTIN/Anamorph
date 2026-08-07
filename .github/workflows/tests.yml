@@ -32,8 +32,56 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest
+          pip install "pytest>=7"
 
       - name: Run tests
         # conftest.py pins QT_QPA_PLATFORM=offscreen, so no display is needed.
         run: pytest -q
+
+  render:
+    # The pixel tests skip on the `offscreen` platform, so without this job
+    # they never ran in CI at all - the output pass could break and every
+    # green tick would still say the suite passed.
+    name: pytest (OpenGL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Qt and a software OpenGL stack
+        # xvfb gives Qt a real X display; mesa-utils and libgl1-mesa-dri give
+        # it a rasteriser, since a CI runner has no GPU.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 \
+            libglib2.0-0 libdbus-1-3 \
+            libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "pytest>=7"
+
+      - name: Run the pixel tests
+        # One run, and the guard reads its output: a missing GL library makes
+        # every test skip, and a skipped pixel suite is a green tick that
+        # proves nothing.
+        env:
+          QT_QPA_PLATFORM: xcb
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -o pipefail
+          xvfb-run -a pytest tests/test_render_gl.py -q | tee result.txt
+          grep -qE "[0-9]+ passed" result.txt
+          if grep -qE "[0-9]+ skipped" result.txt; then
+            echo "::error::The pixel tests skipped - there is no usable GL context here."
+            exit 1
+          fi
