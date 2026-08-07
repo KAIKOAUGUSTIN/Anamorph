@@ -9,6 +9,7 @@ nothing to blend. A rig has one canvas; the projectors are outputs onto it.
 from __future__ import annotations
 
 import json
+import os
 import logging
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -17,11 +18,15 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QGuiApplication
 
 from pm.model.output import Output
+from pm.io.media_paths import base_dir_for, rewrite_media_paths, to_absolute
 from pm.model.project import Project
 
 logger = logging.getLogger(__name__)
 
 PROJECT_FILENAME = "session.pmap.json"
+# Bookkeeping the session file carries and a `.pmap.json` must never contain:
+# a project that records its own path breaks the moment it is moved.
+SESSION_KEY = "_session"
 LEGACY_WORKSPACE_DIR = "workspaces"
 
 # (index, screen_id, screen_name, geometry)
@@ -73,6 +78,10 @@ class ProjectStore(QObject):
         super().__init__(parent)
         self._base_path: Optional[Path] = None
         self._project = Project()
+        # Set by `load` when the restored session held work that never made it
+        # to the operator's own file. The window says so once, in the status
+        # bar - a modal on startup would be answered without being read.
+        self.recovered_unsaved = False
 
     @property
     def project(self) -> Project:
@@ -95,9 +104,21 @@ class ProjectStore(QObject):
         if path and path.exists():
             try:
                 with open(path, "r", encoding="utf-8") as handle:
-                    project = Project.from_dict(json.load(handle))
-                project.path = str(path)
+                    data = json.load(handle)
+                session = data.get(SESSION_KEY) or {}
+                base = session.get("source_path")
+                rewrite_media_paths(data, lambda p: to_absolute(p, base_dir_for(base)))
+                project = Project.from_dict(data)
+                # The session used to claim it *was* the project file, so the
+                # next Ctrl+S wrote over the copy in app data and left the
+                # operator's own file untouched and stale.
+                project.path = base
                 project.mark_saved()
+                if session.get("dirty"):
+                    # Work that never reached disk: the app was closed hard,
+                    # or crashed. It is back, and it is still unsaved.
+                    project.dirty = True
+                    self.recovered_unsaved = True
                 self._project = project
                 return project
             except Exception as exc:
@@ -112,14 +133,33 @@ class ProjectStore(QObject):
         self._project.outputs = [Output(name="Projector 1")]
         return self._project
 
-    def save(self) -> None:
+    def save(self, mark_saved: bool = True) -> None:
+        """Write the session copy.
+
+        `mark_saved=False` is the autosave path: the work is safe from a crash
+        but it has *not* reached the operator's own file, and clearing the
+        dirty flag here would stop the close prompt from ever asking again.
+        """
         path = self.session_path()
         if not path:
             return
         try:
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump(self._project.to_dict(), handle, indent=2)
-            self._project.mark_saved()
+            data = self._project.to_dict()
+            # The session lives in app data and the media does not, so its
+            # paths stay absolute - but it has to remember which file the
+            # project came from, or a restored session forgets where to save.
+            data[SESSION_KEY] = {
+                "source_path": self._project.path,
+                "dirty": bool(self._project.dirty) and not mark_saved,
+            }
+            temp = path.with_suffix(path.suffix + ".tmp")
+            with open(temp, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp, path)
+            if mark_saved:
+                self._project.mark_saved()
         except Exception as exc:
             logger.warning("Could not write %s: %s", path, exc)
 
