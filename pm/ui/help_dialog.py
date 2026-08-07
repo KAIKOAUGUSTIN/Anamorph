@@ -59,7 +59,9 @@ SHORTCUTS: List[Section] = [
     ("Project", [
         ("Ctrl + Z", "Undo"),
         ("Ctrl + Shift + Z  or  Ctrl + Y", "Redo"),
-        ("Ctrl + N / O / S", "New, open, save"),
+        ("Ctrl + N", "New project"),
+        ("Ctrl + O", "Open a project"),
+        ("Ctrl + S", "Save"),
         ("Escape", "Close the fullscreen projection"),
         ("F1", "This sheet"),
     ]),

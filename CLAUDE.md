@@ -47,7 +47,8 @@ python projection_gui.py
   - `object_list.py` - Layer list with visibility, lock and group markers, and Solo
   - `source_region.py` - Draggable rectangle over the media thumbnail, for picking the input region
   - `output_panel.py` - `OutputDialog`: per-projector region, keystone, blend, colour and the canvas resolution
-  - `help_dialog.py` - The shortcut sheet, non-modal so it can stay open
+  - `help_dialog.py` - The shortcut sheet, non-modal so it can stay open. `tests/test_problems.py` checks every key it names is actually bound - a manual that lies is worse than none
+  - `problem_log.py` - A logging handler that puts warnings and errors where the operator can see them
   - `transport_bar.py` - Play/pause, restart and rate, in the toolbar
   - `relink_dialog.py` - Point the project at media that has moved, by folder
   - `output_preview.py` - Live view of one projector's frame, through its own calibration
@@ -156,6 +157,20 @@ python projection_gui.py
 11. **Input space**: `MediaRef.source_rect` (a `SourceRect`) says *which part* of the media feeds a surface, independent of where that surface sits. One clip can drive six surfaces, each taking a different region. It is applied last in the UV chain - after fit, corner pin and `MediaTransform` - in `FRAGMENT_SHADER_TEXTURE`, and mirrored in `canvas_editor._paint_media`. Aspect ratio and pixel offsets are measured against the *region*, not the whole file.
 
    Axis-aligned on purpose: a free quad here would be a second homography stacked on the corner pin, and the real need ("this wall shows the left third") is a rectangle.
+
+### Errors the operator can see
+
+Everything non-fatal used to end at `logger.warning`, in a console nobody
+watches during a show. `ProblemLog` is a **logging handler**, not a rewrite of
+every call site: those calls are already in the right places and already say
+the right thing, and what was missing was somewhere for them to arrive.
+Anything at WARNING or above under the `pm` package shows up in the toolbar
+and in a dialog - which also means a failure added later is visible without
+anyone remembering to wire it.
+
+Two things stay modal, because they block rather than inform: a save that did
+not happen, and a project that would not open. Everything else is a status
+message plus a line in the list.
 
 ### Blackout, and missing media
 
@@ -273,6 +288,13 @@ downstream can put back. The outputs dialog adopts a screen's resolution the
 first time an output is aimed at one, and never touches a size the operator has
 already set. It can also be typed, or matched to the selected projector.
 
+### Naming
+
+New surfaces are called `Polygon`, `Circle`, `Mesh` (`DEFAULT_*_NAME` in
+`pm/model/shapes.py`). They used to be Portuguese in an English interface,
+which reads as a bug rather than a choice. Existing projects are unaffected -
+a shape's name travels with the shape.
+
 ### File Format
 
 Projects saved as JSON with `.pmap.json` extension containing:
@@ -370,6 +392,7 @@ pytest
 - `tests/test_performance.py` - the geometry cache's hit/miss behaviour and per-frame budgets
 - `tests/test_playback.py` - the show clock, decoder sharing, loop/offset/rate, the transport bar
 - `tests/test_showtime.py` - blackout, missing-media detection, relinking, the undo gaps
+- `tests/test_problems.py` - the problem log, the real call sites reaching it, and that the help sheet's keys are bound
 - `tests/test_render_gl.py` - **pixels**: what actually lands on the projector
 
 `test_render_gl.py` needs a real GL context, which the `offscreen` platform
