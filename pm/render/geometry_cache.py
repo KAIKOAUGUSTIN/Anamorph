@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Per-frame geometry, computed only when the geometry actually changed.
 
 The renderer repaints on a 16ms timer whether anything moved or not, and it

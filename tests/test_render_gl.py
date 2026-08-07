@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Pixel tests: what actually lands on the projector.
 
 Everything else in this suite checks the numbers that feed the renderer. These

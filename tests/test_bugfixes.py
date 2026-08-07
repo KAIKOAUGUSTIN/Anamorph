@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Regressions for the bugs found using the app.
 
 Each test here failed before its fix. Grouped by what the operator saw, not by

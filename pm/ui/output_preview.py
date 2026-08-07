@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """What each projector actually sees, without turning the projector on.
 
 Everything downstream of the canvas - the region crop, the keystone, the blend

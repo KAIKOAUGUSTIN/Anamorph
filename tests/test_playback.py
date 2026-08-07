@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Media that plays, on a clock the whole show shares.
 
 Before this a clip started free-running the moment it was loaded and never

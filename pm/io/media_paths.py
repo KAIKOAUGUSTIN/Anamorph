@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Where a project's media lives, written so the project can be moved.
 
 A `.pmap.json` used to store absolute paths. Copy the show folder to the

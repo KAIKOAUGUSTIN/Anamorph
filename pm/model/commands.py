@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Undoable edits, built on snapshots rather than inverse operations.
 
 Shapes are mutable dataclasses that the canvas edits in place during a drag,

@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """The show's transport: one place that stops everything.
 
 A projection show is not a collection of independently drifting clips. It has

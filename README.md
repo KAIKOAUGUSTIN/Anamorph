@@ -1,5 +1,7 @@
 # Anamorph
 
+[![Licence: GPL v3+](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue.svg)](LICENSE)
+
 Projection mapping: take a video or an image, cut it into surfaces, and land
 each surface exactly on the thing you are projecting onto — a wall, a column,
 a set piece, a shop window.
@@ -216,6 +218,39 @@ xvfb-run -a env QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 pytest
 before changing anything, not this file.
 
 ---
+
+## Licence
+
+Anamorph is free software: you can redistribute it and modify it under the
+terms of the **GNU General Public License, version 3 or later**, as published
+by the Free Software Foundation. The full text is in [LICENSE](LICENSE).
+
+It is distributed in the hope that it will be useful, but **WITHOUT ANY
+WARRANTY** — without even the implied warranty of merchantability or fitness
+for a particular purpose.
+
+In practice, what this means for you:
+
+- **Use it for anything**, including paid commercial shows. Using the program
+  puts no obligation on you at all.
+- **If you distribute it** — modified or not, free or sold — you have to pass
+  on the source under the same licence, and keep the notices intact.
+- **Your shows are yours.** The licence covers this program's code, not the
+  `.pmap.json` files you make with it or the media you project.
+
+Third-party components and their licences are listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+## Contributing
+
+Contributions come in under the same GPL-3.0-or-later, certified with a
+[Developer Certificate of Origin](CONTRIBUTING.md) sign-off (`git commit -s`).
+You keep the copyright on what you write — nothing is assigned to anyone, and
+as a result **this project cannot be relicensed or closed** without every
+contributor agreeing. That is the intent, and the DCO is what makes it
+structural rather than a promise.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## What is not here yet
 

@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Shared QImage cache for the editing viewport.
 
 QGraphicsItem.paint runs on every viewport update, so decoding media from disk

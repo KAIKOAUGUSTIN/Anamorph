@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Where the single project lives on disk, and what screens are available.
 
 This replaces the per-screen workspace manager. That design gave every display

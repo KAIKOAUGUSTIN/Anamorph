@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Per-surface masks: the regions a surface must not project into.
 
 A projector lights the whole surface, and real walls have windows, doorways
