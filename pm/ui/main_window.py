@@ -30,11 +30,13 @@ from pm.model.commands import (
 from pm.model.project import Project
 from pm.model.shapes import Shape, group_members, new_group_id, shape_to_dict
 from pm.model.output import Output
+from pm.media.clip_pool import reset_clip_pool
 from pm.model.project_store import ProjectStore, available_screens, find_screen
 from pm.render.test_pattern import PATTERNS
 from pm.ui.canvas_editor import CanvasEditor
 from pm.ui.output_panel import OutputDialog
 from pm.ui.object_list import ObjectList
+from pm.ui.transport_bar import TransportBar
 from pm.ui.property_panel import PropertyPanel
 from pm.ui.projection_window import ProjectionWindow
 from pm.ui.widgets import ArrowSlider, NoScrollComboBox
@@ -270,6 +272,12 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.pattern_combo)
 
         toolbar.addSeparator()
+
+        # The show clock, next to the projection controls it governs.
+        self.transport_bar = TransportBar(self.project, self)
+        toolbar.addWidget(self.transport_bar)
+
+        toolbar.addSeparator()
         toolbar.addAction(self.action_help)
 
         # Spacer for zoom control
@@ -381,6 +389,13 @@ class MainWindow(QMainWindow):
         self.action_group.triggered.connect(lambda _checked=False: self._group_selected())
         self.action_ungroup.triggered.connect(lambda _checked=False: self._ungroup_selected())
         self.action_help.triggered.connect(lambda _checked=False: self._show_help())
+        self.transport_bar.changed.connect(self.canvas.viewport().update)
+
+        self.action_play_pause = QAction("Play/Pause", self)
+        self.action_play_pause.setShortcut(QKeySequence(Qt.Key_Space))
+        self.action_play_pause.setShortcutContext(Qt.ApplicationShortcut)
+        self.action_play_pause.triggered.connect(lambda _c=False: self.transport_bar.toggle())
+        self.addAction(self.action_play_pause)
 
         self.canvas.selection_changed.connect(self._on_canvas_selection)
         self.canvas.tool_changed.connect(self._on_canvas_tool_changed)
@@ -767,6 +782,12 @@ class MainWindow(QMainWindow):
         )
 
     def _set_project(self, project: Project) -> None:
+        # The show clock belongs to the project, so the transport bar has to
+        # follow it here - the single place `self.project` changes. Hooking it
+        # to one of the callers instead left the bar driving the project that
+        # had just been replaced.
+        if hasattr(self, "transport_bar"):
+            self.transport_bar.set_project(project)
         # Disconnect from whichever project we actually attached to, not from
         # self.project: a project swap repoints that attribute before we get
         # here, and the previous one can stay alive elsewhere, so leaving
@@ -974,6 +995,9 @@ class MainWindow(QMainWindow):
             return
 
         self.store.save()
+        # Decoder threads are daemons, but a clean stop releases the capture
+        # devices - a camera left open is one the next app cannot have.
+        reset_clip_pool()
         # Clean up projection windows
         for pw in self._projection_windows.values():
             pw.close()

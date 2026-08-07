@@ -93,21 +93,97 @@ def _clamp01(value: float) -> float:
 
 
 @dataclass
+class Playback:
+    """How a clip runs against the show clock.
+
+    These belong to the *surface*, not to the file: the same video can be a
+    looping backdrop on one wall and a one-shot sting on another. Two surfaces
+    whose playback settings match share a decoder and are therefore frame-
+    accurate against each other; that is how synchronisation is spelled here.
+    """
+
+    loop: bool = True
+    speed: float = 1.0
+    # Where in the clip show-time zero lands, in seconds. A negative value is
+    # a delay: the clip has not started yet when the show does.
+    start: float = 0.0
+    # What to show once a non-looping clip runs out. Holding the last frame is
+    # almost always what a projection wants - going black mid-show because a
+    # clip ended is a failure the audience sees.
+    hold_last: bool = True
+
+    MIN_SPEED = 0.05
+    MAX_SPEED = 4.0
+
+    def normalised(self) -> "Playback":
+        return Playback(
+            loop=bool(self.loop),
+            speed=max(self.MIN_SPEED, min(self.MAX_SPEED, float(self.speed))),
+            start=float(self.start),
+            hold_last=bool(self.hold_last),
+        )
+
+    def is_default(self) -> bool:
+        return (self.loop, self.speed, self.start, self.hold_last) == (True, 1.0, 0.0, True)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "loop": bool(self.loop),
+            "speed": float(self.speed),
+            "start": float(self.start),
+            "hold_last": bool(self.hold_last),
+        }
+
+    @staticmethod
+    def from_dict(data: Dict[str, Any]) -> "Playback":
+        if not data:
+            return Playback()
+        return Playback(
+            loop=bool(data.get("loop", True)),
+            speed=float(data.get("speed", 1.0)),
+            start=float(data.get("start", 0.0)),
+            hold_last=bool(data.get("hold_last", True)),
+        )
+
+
+# What a MediaRef can point at. "camera" carries a device index in `path`; a
+# live feed has no timeline, so the transport does not apply to it.
+MEDIA_KINDS = ("image", "video", "camera")
+
+TIMED_KINDS = ("video",)
+
+
+@dataclass
 class MediaRef:
-    kind: Optional[str] = None  # "image", "video", or None
+    kind: Optional[str] = None  # "image", "video", "camera", or None
     path: str = ""
     fit_mode: str = "stretch"  # "stretch", "contain", "cover", "warp"
     transform: MediaTransform = field(default_factory=MediaTransform)
     source_rect: SourceRect = field(default_factory=SourceRect)
+    playback: Playback = field(default_factory=Playback)
+
+    @property
+    def is_timed(self) -> bool:
+        """True when the show clock has anything to say about this media."""
+        return self.kind in TIMED_KINDS
+
+    @property
+    def is_live(self) -> bool:
+        return self.kind == "camera"
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data: Dict[str, Any] = {
             "kind": self.kind,
             "path": self.path,
             "fit_mode": self.fit_mode,
             "transform": self.transform.to_dict(),
             "source_rect": self.source_rect.to_dict(),
         }
+        # Left out when it says nothing, so files written before playback
+        # settings existed keep exactly the shape they had.
+        if not self.playback.is_default():
+            data["playback"] = self.playback.to_dict()
+        return data
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "MediaRef":
@@ -121,4 +197,5 @@ class MediaRef:
             # Absent in files written before source regions existed, which
             # is exactly the full frame.
             source_rect=SourceRect.from_dict(data.get("source_rect", {})),
+            playback=Playback.from_dict(data.get("playback", {})),
         )
