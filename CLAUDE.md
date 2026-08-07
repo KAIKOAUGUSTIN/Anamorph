@@ -47,6 +47,7 @@ python projection_gui.py
   - `source_region.py` - Draggable rectangle over the media thumbnail, for picking the input region
   - `output_panel.py` - `OutputDialog`: per-projector region, keystone, blend, colour and the canvas resolution
   - `help_dialog.py` - The shortcut sheet, non-modal so it can stay open
+  - `output_preview.py` - Live view of one projector's frame, through its own calibration
 - `styles.py` - Studio Dark Luxury theme with cyan accents; provides `STUDIO_DARK_QSS` stylesheet and `COLORS` palette for consistent UI styling
 - `widgets.py` - Keyboard-friendly widgets: `ArrowSlider`/`ArrowSpinBox` for arrow-key navigation, and a `NoScrollMixin` so the wheel cannot edit a field it merely rolled past
 
@@ -54,6 +55,7 @@ python projection_gui.py
   - `gl_renderer.py` - `QOpenGLWidget` renderer with GLSL shaders; uploads media as GL textures and caches them per path
   - `shaders.py` - GLSL sources: shared vertex shader plus texture/solid/stroke fragment shaders
   - `homography.py` - Corner-pin math (numpy only, no Qt/GL), shared by the renderer and the editor preview
+  - `geometry_cache.py` - Triangles, rebuilt only when a shape's geometry signature changes
   - `fit.py` - `content_rect`: where media sits inside a surface's box. The single source of truth for stretch/contain/cover
   - `test_pattern.py` - Calibration images (grid / checkerboard / borders) drawn with QPainter
   - `mesh.py` - All the CPU-side geometry: earcut triangulation with holes (`triangulate_with_holes`), the Catmull-Rom patch behind `MeshShape` (`tessellate_mesh`/`mesh_outline`), and the cubic-edge sampling behind curved polygons (`bezier_control_points`/`polygon_outline`)
@@ -63,7 +65,8 @@ python projection_gui.py
   - `image_cache.py` - mtime-keyed QImage cache for the editor viewport (paint runs every frame)
 
 - `pm/io/` - Serialization
-  - `project_io.py` - JSON save/load with `.pmap.json` extension
+  - `project_io.py` - JSON save/load with `.pmap.json` extension; atomic write, `.bak` of the previous version
+  - `media_paths.py` - Media paths relative to the project file, so a show folder can be moved
 
 ### Key Design Patterns
 
@@ -150,6 +153,46 @@ python projection_gui.py
 
    Axis-aligned on purpose: a free quad here would be a second homography stacked on the corner pin, and the real need ("this wall shows the left third") is a rectangle.
 
+### Files, autosave and recovery
+
+`.pmap.json` stores media paths **relative to itself** (`pm/io/media_paths.py`)
+when the media is within a few hops of the project - the case where the folder
+travels as one piece. Anything further away keeps its absolute path, because a
+media server is not part of the show. Only the file is relative: the in-memory
+model always holds absolute paths, since the image cache and the video decoder
+open them directly.
+
+Saving writes to a temp file and renames it into place, after copying the
+previous version to `.bak`. A crash mid-write cannot leave a half-written
+project where the good one used to be.
+
+The session copy in app data is the crash net. `MainWindow` autosaves it every
+20 seconds while the project is dirty, with `mark_saved=False` - the work is
+safe from a crash but it has *not* reached the operator's file, and clearing
+the dirty flag would stop the close prompt from ever asking again. The session
+carries a `_session` block (`source_path`, `dirty`) that a `.pmap.json` must
+never contain: a project recording its own path breaks the moment it is moved.
+On restore, a session that was dirty comes back dirty and the window says so.
+
+### Performance
+
+The renderer repaints on a 16ms timer whether anything moved or not, and it
+used to rebuild every surface's triangles each time: 50 surfaces cost 60ms of
+Python per frame - 16fps before the GPU saw a vertex. Two fixes, both in place:
+
+- `tessellate_mesh` is vectorised with numpy. The Catmull-Rom patch was a
+  Python triple loop at ~5ms *per mesh*, and it was called twice per mesh per
+  frame because UVs were requested separately.
+- `GeometryCache` keys triangles on a **signature** of the shape's geometry,
+  not on object identity - undo replaces a shape rather than mutating it, so
+  identity says "new" for something bit-for-bit unchanged, while a dragged
+  corner mutates in place without changing identity at all. Colour, opacity
+  and effects are absent from the signature: they change constantly during a
+  show and none of them moves a vertex.
+
+200 surfaces went from 253ms to 0.43ms per idle frame, and 1.2ms while a mesh
+is being dragged. `tests/test_performance.py` guards both with loose budgets.
+
 ### Canvas resolution
 
 `CanvasSettings` starts at 1280x720 and knows it (`is_default()`). Everything -
@@ -197,6 +240,7 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 - **Project** - Toggle fullscreen projection to selected screen
 - **Test Mode** + pattern dropdown - Replace the output with a calibration pattern
 - **Help** - Every gesture and shortcut on one sheet (`F1`)
+- **Preview** - Watch one projector's frame - region, keystone, blend, colour - without projecting
 - **Outputs...** - Per-projector calibration: canvas region, keystone, edge blend, colour. `Tile` lays out N projectors pre-overlapped with matching ramps
 
 ### Keyboard Shortcuts
@@ -248,10 +292,27 @@ pytest
 - `tests/test_groups.py` - group selection, the shared pivot, one undo step for a group gesture, locked members
 - `tests/test_bugfixes.py` - regressions found by using the app: the missing circle wedge, handles that could not be dragged, selections that collapsed, the two handle sets, type conversion, canvas resolution
 
-Rendering itself is not covered by the suite: `QOpenGLWidget` refuses to create a
-context on the `offscreen` platform. To check the actual output, run under a real
-platform (`xvfb-run -a env QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 ...`) and
-compare `GLRenderer.grabFramebuffer()` against the editor preview.
+- `tests/test_project_files.py` - relative media paths, backups, atomic writes, session recovery, the output preview
+- `tests/test_performance.py` - the geometry cache's hit/miss behaviour and per-frame budgets
+- `tests/test_render_gl.py` - **pixels**: what actually lands on the projector
+
+`test_render_gl.py` needs a real GL context, which the `offscreen` platform
+cannot give, so it skips by default and runs for real under:
+
+```bash
+xvfb-run -a env QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 pytest
+```
+
+It covers the failures that live in the gap between the numbers and the frame:
+the canvas Y flip, stroke width, a mask cut out of the geometry but not the
+image, a circle that does not close, `contain` smearing instead of
+letterboxing, and the output pass (region crop, blend ramp, colour). Each one
+was verified to fail when its fix is reverted.
+
+`tests/conftest.py` drains Qt's deferred deletions after every test and closes
+the remaining widgets before the QApplication goes away. Without it hundreds of
+never-deleted widgets - some holding GL contexts - piled up and the process
+segfaulted on the way out, *after* every test had passed.
 
 ## Notes
 
