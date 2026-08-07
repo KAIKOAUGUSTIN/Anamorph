@@ -168,7 +168,10 @@ def test_full_frame_button_restores_everything(panel):
     assert project.shapes[0].media.source_rect.is_full_frame()
 
 
-def test_picker_is_hidden_for_video(panel):
+def test_the_picker_previews_video_too(panel):
+    """It used to be images only, because previewing video meant a second
+    decoder per surface. Decoders are shared now, so the region can be aimed
+    by eye instead of typed blind."""
     widget, project = panel
     shape = polygon_from_points(list(QUAD))
     shape.media.kind = "video"
@@ -177,5 +180,14 @@ def test_picker_is_hidden_for_video(panel):
 
     widget.set_shape(shape)
 
-    # Previewing video here would mean a second decoder per surface.
+    assert widget.source_picker.isVisibleTo(widget)
+
+
+def test_the_picker_is_hidden_with_no_media(panel):
+    widget, project = panel
+    shape = polygon_from_points(list(QUAD))
+    project.add_shape(shape)
+
+    widget.set_shape(shape)
+
     assert not widget.source_picker.isVisibleTo(widget)

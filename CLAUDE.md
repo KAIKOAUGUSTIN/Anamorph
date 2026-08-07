@@ -34,6 +34,7 @@ python projection_gui.py
   - `media.py` - MediaRef (image/video) with fit modes, UV transform, and `SourceRect` (which region of the media feeds the surface)
   - `effects.py` - Effects (pulse, strobe, RGB shift) with parameters
   - `commands.py` - Undoable edits as `QUndoCommand`s, plus `EditSession` for turning a drag - of one shape or a whole group - into one step
+  - `transport.py` - The show clock: play/pause/seek/rate for the whole project
   - `snapping.py` - Magnetic snap search (vertex, then edge, then grid); pure geometry
   - `output.py` - `Output` (canvas region, keystone, `EdgeBlend`, `ColorCorrection`) and `split_outputs`
   - `project_store.py` - Loads/saves the one session project; migrates the old per-screen workspaces
@@ -47,6 +48,7 @@ python projection_gui.py
   - `source_region.py` - Draggable rectangle over the media thumbnail, for picking the input region
   - `output_panel.py` - `OutputDialog`: per-projector region, keystone, blend, colour and the canvas resolution
   - `help_dialog.py` - The shortcut sheet, non-modal so it can stay open
+  - `transport_bar.py` - Play/pause, restart and rate, in the toolbar
   - `output_preview.py` - Live view of one projector's frame, through its own calibration
 - `styles.py` - Studio Dark Luxury theme with cyan accents; provides `STUDIO_DARK_QSS` stylesheet and `COLORS` palette for consistent UI styling
 - `widgets.py` - Keyboard-friendly widgets: `ArrowSlider`/`ArrowSpinBox` for arrow-key navigation, and a `NoScrollMixin` so the wheel cannot edit a field it merely rolled past
@@ -61,7 +63,7 @@ python projection_gui.py
   - `mesh.py` - All the CPU-side geometry: earcut triangulation with holes (`triangulate_with_holes`), the Catmull-Rom patch behind `MeshShape` (`tessellate_mesh`/`mesh_outline`), and the cubic-edge sampling behind curved polygons (`bezier_control_points`/`polygon_outline`)
 
 - `pm/media/` - Media handling
-  - `video_player.py` - OpenCV-based video playback with threading, looping, and RGB conversion
+  - `clip_pool.py` - Every open decoder, shared and keyed by what it is playing; the show clock drives them
   - `image_cache.py` - mtime-keyed QImage cache for the editor viewport (paint runs every frame)
 
 - `pm/io/` - Serialization
@@ -152,6 +154,51 @@ python projection_gui.py
 11. **Input space**: `MediaRef.source_rect` (a `SourceRect`) says *which part* of the media feeds a surface, independent of where that surface sits. One clip can drive six surfaces, each taking a different region. It is applied last in the UV chain - after fit, corner pin and `MediaTransform` - in `FRAGMENT_SHADER_TEXTURE`, and mirrored in `canvas_editor._paint_media`. Aspect ratio and pixel offsets are measured against the *region*, not the whole file.
 
    Axis-aligned on purpose: a free quad here would be a second homography stacked on the corner pin, and the real need ("this wall shows the left third") is a rectangle.
+
+### Media playback
+
+Clips do not run on their own clocks. `Project.transport` (`pm/model/transport.py`)
+is monotonic wall time scaled by `speed`, and every decoder reads its position
+from there. That is what makes one button stop the whole show, and what makes a
+stalled file unable to drag the rest of it back.
+
+**Sharing is how synchronisation is spelled.** `ClipPool` keys a decoder on
+`clip_key(media)` - the path plus the playback settings - so two surfaces
+showing the same file the same way share one decoder and cannot drift from each
+other. Different settings get their own decoder, which is the only honest answer
+when one is at half speed. The pool is process-wide, so the editor, the output
+preview and every projection window decode a clip once between them; that is
+what finally made video previewable in the editor.
+
+`MediaRef.playback` (`Playback`) belongs to the *surface*, not the file: `loop`,
+`speed`, `start` (where show-time zero lands in the clip - negative delays it)
+and `hold_last`. Holding the last frame is the default because going black
+mid-show is a failure the audience sees.
+
+The decode thread never seeks unless the show clock has moved somewhere it
+cannot reach by reading forward - seeking a compressed video is expensive and
+inexact, so playing forward at normal speed never does it. When the show is
+paused or running slow, the thread waits instead of decoding frames that will
+be thrown away.
+
+`kind` is `image`, `video` or `camera`; a camera carries its device index in
+`path` and has no timeline, so the transport does not apply to it.
+
+### Blend modes
+
+`blend_mode` has been on the model and in the file format since the beginning
+and the renderer never read it - every surface composited as `normal`. It is
+`glBlendFunc` per shape now (`GLRenderer.BLEND_MODES`), reset to normal
+afterwards so it cannot leak into the next surface or the output pass.
+
+Add and screen are how projected light actually behaves: two beams on the same
+wall sum, they do not replace one another. Multiply is a gel. The editor
+mirrors all four with `QPainter` composition modes (`canvas_editor.apply_blend_mode`),
+because a preview that composites differently from the projector is the failure
+this codebase has spent the most effort on.
+
+Stacking two surfaces with `add` is also the answer to "one media layer per
+surface" for now: there is no multi-layer compositing inside a single surface.
 
 ### Files, autosave and recovery
 
@@ -258,11 +305,13 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 - `Delete` / `Backspace` - Remove selected shape
 - Click a selected shape again - Swap between the transform grips and its own points
 - `Escape` - Close fullscreen projection window
+- `Space` - Play or pause the whole show
 - `F1` - Keyboard and mouse reference
 
 ### Supported Media Formats
 - **Images:** PNG, JPG, JPEG, BMP
 - **Videos:** MP4, MOV, AVI, MKV
+- **Live:** any capture device OpenCV can open, by index
 
 ## Testing
 
@@ -294,6 +343,7 @@ pytest
 
 - `tests/test_project_files.py` - relative media paths, backups, atomic writes, session recovery, the output preview
 - `tests/test_performance.py` - the geometry cache's hit/miss behaviour and per-frame budgets
+- `tests/test_playback.py` - the show clock, decoder sharing, loop/offset/rate, the transport bar
 - `tests/test_render_gl.py` - **pixels**: what actually lands on the projector
 
 `test_render_gl.py` needs a real GL context, which the `offscreen` platform
@@ -306,8 +356,8 @@ xvfb-run -a env QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 pytest
 It covers the failures that live in the gap between the numbers and the frame:
 the canvas Y flip, stroke width, a mask cut out of the geometry but not the
 image, a circle that does not close, `contain` smearing instead of
-letterboxing, and the output pass (region crop, blend ramp, colour). Each one
-was verified to fail when its fix is reverted.
+letterboxing, the output pass (region crop, blend ramp, colour) and the four
+blend modes. Each one was verified to fail when its fix is reverted.
 
 `tests/conftest.py` drains Qt's deferred deletions after every test and closes
 the remaining widgets before the QApplication goes away. Without it hundreds of

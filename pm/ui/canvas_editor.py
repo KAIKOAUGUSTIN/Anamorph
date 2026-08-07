@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QGraphicsView,
 )
 
+from pm.media.clip_pool import clip_pool
 from pm.media.image_cache import get_qimage
 from pm.model.commands import AddShapeCommand, EditSession
 from pm.model.project import Project
@@ -151,7 +152,24 @@ class CanvasScene(QGraphicsScene):
         painter.restore()
 
 
-def _paint_media(painter: QPainter, shape: Shape, path: QPainterPath) -> bool:
+def media_frame(media, transport=None) -> Optional[QImage]:
+    """The image to draw for a surface right now: a still, or a live frame."""
+    if media.kind == "image":
+        return get_qimage(media.path)
+    if media.kind not in ("video", "camera"):
+        return None
+
+    show_time = transport.position() if transport is not None else 0.0
+    frame, size = clip_pool().frame(media, show_time)
+    if frame is None or size == (0, 0):
+        return None
+    # Wrapped, not copied: the pool hands out its own array and QImage borrows
+    # it for the length of this paint. `.copy()` here would be a full-frame
+    # memcpy per surface per repaint.
+    return QImage(frame.data, size[0], size[1], frame.strides[0], QImage.Format_RGB888)
+
+
+def _paint_media(painter: QPainter, shape: Shape, path: QPainterPath, transport=None) -> bool:
     """Draw a shape's media into the editor, matching what gets projected.
 
     Corner-pinned quads go through QTransform.quadToQuad, which is the same
@@ -159,14 +177,16 @@ def _paint_media(painter: QPainter, shape: Shape, path: QPainterPath) -> bool:
     lands on the wall. Returns False when there is nothing to draw and the
     caller should fall back to the flat fill colour.
 
-    Video is deliberately not previewed: a second decoder per shape would
-    double the cost of every clip just to feed the editor.
+    Video and camera feeds are previewed too, now that decoders are shared:
+    the editor asks the same pool the projectors do, so a clip already playing
+    on the wall costs nothing extra to show here. Calibrating a surface
+    against an empty rectangle was guesswork.
     """
     media = getattr(shape, "media", None)
-    if not media or media.kind != "image":
+    if not media or not media.kind:
         return False
 
-    image = get_qimage(media.path)
+    image = media_frame(media, transport)
     if image is None:
         return False
 
@@ -213,7 +233,7 @@ def _paint_media(painter: QPainter, shape: Shape, path: QPainterPath) -> bool:
     return True
 
 
-def _paint_mesh_media(painter: QPainter, shape: MeshShape) -> bool:
+def _paint_mesh_media(painter: QPainter, shape: MeshShape, transport=None) -> bool:
     """Draw media across a bent surface, triangle by triangle.
 
     QPainter has no mesh primitive, so each tessellated triangle is filled
@@ -222,9 +242,9 @@ def _paint_mesh_media(painter: QPainter, shape: MeshShape) -> bool:
     the preview; the projector gets the same UVs through the shader.
     """
     media = getattr(shape, "media", None)
-    if not media or media.kind != "image":
+    if not media or not media.kind:
         return False
-    image = get_qimage(media.path)
+    image = media_frame(media, transport)
     if image is None:
         return False
 
@@ -279,6 +299,27 @@ def _triangle_transform(source: QPolygonF, target: QPolygonF) -> Optional[QTrans
         return None
 
     return QTransform(col_x[0], col_y[0], col_x[1], col_y[1], col_x[2], col_y[2])
+
+
+# The editor has to composite the way the projector does, or the preview goes
+# back to lying about the output - the failure this codebase has spent the most
+# effort on. QPainter's modes are the same operations the GL blend pairs are.
+COMPOSITION_MODES = {
+    "normal": QPainter.CompositionMode_SourceOver,
+    "add": QPainter.CompositionMode_Plus,
+    "screen": QPainter.CompositionMode_Screen,
+    "multiply": QPainter.CompositionMode_Multiply,
+}
+
+
+def apply_blend_mode(painter: QPainter, shape) -> None:
+    mode = (getattr(shape, "blend_mode", "normal") or "normal").lower()
+    painter.setCompositionMode(COMPOSITION_MODES.get(mode, QPainter.CompositionMode_SourceOver))
+
+
+def clear_blend_mode(painter: QPainter) -> None:
+    """Handles, outlines and selection marks are UI, not artwork."""
+    painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
 
 def polygon_path(shape: PolygonShape) -> QPainterPath:
@@ -581,6 +622,10 @@ class PolygonItem(QGraphicsPathItem):
         self.handles: List[VertexHandle] = []
         self.curve_handles: List[CurveHandle] = []
         self.mask_handles: List[MaskHandle] = []
+        # Filled in by the editor. Without it a clip's frame would be picked
+        # by whatever clock the item invented for itself, and the canvas would
+        # disagree with the projector about which frame is showing.
+        self.transport = None
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
         self.setBrush(QBrush(QColor(*model.fill_color)))
         self.setPen(QPen(QColor(*model.stroke_color), max(model.stroke_width, 1.0)))
@@ -603,8 +648,10 @@ class PolygonItem(QGraphicsPathItem):
 
     def paint(self, painter, option, widget=None) -> None:
         painter.setRenderHint(QPainter.Antialiasing, True)
-        if not _paint_media(painter, self.model, self.path()):
+        apply_blend_mode(painter, self.model)
+        if not _paint_media(painter, self.model, self.path(), self.transport):
             painter.fillPath(self.path(), QBrush(QColor(*self.model.fill_color)))
+        clear_blend_mode(painter)
 
         if self.model.stroke_width > 0:
             pen = QPen(QColor(*self.model.stroke_color), max(self.model.stroke_width, 0.5))
@@ -663,6 +710,7 @@ class MeshItem(QGraphicsPathItem):
     def __init__(self, model: MeshShape) -> None:
         super().__init__()
         self.model = model
+        self.transport = None
         self.handles: List[VertexHandle] = []
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
         self.update_path()
@@ -686,8 +734,10 @@ class MeshItem(QGraphicsPathItem):
 
     def paint(self, painter, option, widget=None) -> None:
         painter.setRenderHint(QPainter.Antialiasing, True)
-        if not _paint_mesh_media(painter, self.model):
+        apply_blend_mode(painter, self.model)
+        if not _paint_mesh_media(painter, self.model, self.transport):
             painter.fillPath(self.path(), QBrush(QColor(*self.model.fill_color)))
+        clear_blend_mode(painter)
 
         if self.model.stroke_width > 0:
             painter.setPen(QPen(QColor(*self.model.stroke_color), max(self.model.stroke_width, 0.5)))
@@ -717,6 +767,7 @@ class CircleItem(QGraphicsEllipseItem):
         self.model = model
         self.handles: List[VertexHandle] = []
         self.mask_handles: List[MaskHandle] = []
+        self.transport = None
         self.handle_angle = -math.pi / 2.0
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemSendsGeometryChanges)
         self.setBrush(QBrush(QColor(*model.fill_color)))
@@ -754,11 +805,13 @@ class CircleItem(QGraphicsEllipseItem):
         ellipse = QPainterPath()
         ellipse.addEllipse(rect)
         ellipse = add_mask_subpaths(ellipse, self.model)
-        if _paint_media(painter, self.model, ellipse):
+        apply_blend_mode(painter, self.model)
+        if _paint_media(painter, self.model, ellipse, self.transport):
             painter.setBrush(Qt.NoBrush)
         else:
             painter.fillPath(ellipse, QBrush(QColor(*self.model.fill_color)))
             painter.setBrush(Qt.NoBrush)
+        clear_blend_mode(painter)
         if self.model.stroke_width > 0:
             pen = QPen(QColor(*self.model.stroke_color), max(self.model.stroke_width, 0.5))
             painter.setPen(pen)
@@ -791,6 +844,10 @@ class CanvasEditor(QGraphicsView):
     # feels constant to the hand rather than to the scene.
     SNAP_THRESHOLD_PX = 12.0
 
+    # The editor is a calibration view, not the show: 30fps is plenty to judge
+    # a mapping by, and half the repaint cost of matching the output.
+    PLAYBACK_REFRESH_MS = 33
+
     def __init__(self, project: Project, parent=None) -> None:
         super().__init__(parent)
         self.project = project
@@ -809,6 +866,14 @@ class CanvasEditor(QGraphicsView):
         self._point_mode = False
         self._selection_key: Tuple[str, ...] = ()
         self._pan_origin: Optional[QPointF] = None
+
+        # A QGraphicsView only repaints when something changes, and a playing
+        # clip changes nothing the scene knows about. This ticks the viewport
+        # while any visible surface is showing moving media - and only then,
+        # so a still project costs nothing.
+        self._playback_timer = QTimer(self)
+        self._playback_timer.setInterval(self.PLAYBACK_REFRESH_MS)
+        self._playback_timer.timeout.connect(self._tick_playback)
         self._last_canvas = (project.canvas.width, project.canvas.height)
         self._panning = False
         self._pan_last: Optional[QPointF] = None
@@ -1038,22 +1103,26 @@ class CanvasEditor(QGraphicsView):
     def _create_item(self, shape: Shape):
         if isinstance(shape, MeshShape):
             item = MeshItem(shape)
+            item.transport = self.project.transport
             item.setVisible(shape.visible)
             self._create_mesh_handles(item)
             return item
         if isinstance(shape, PolygonShape):
             item = PolygonItem(shape)
+            item.transport = self.project.transport
             item.setVisible(shape.visible)
             self._create_point_handles(item)
             return item
         if isinstance(shape, CircleShape):
             item = CircleItem(shape)
+            item.transport = self.project.transport
             item.setVisible(shape.visible)
             self._create_circle_point_handles(item)
             return item
         raise ValueError("Shape desconhecido")
 
     def _update_item(self, item, shape: Shape) -> None:
+        item.transport = self.project.transport
         # Undo replaces the shape *object* (commands restore from a snapshot,
         # they do not mutate in place), so an item that keeps its original
         # reference goes on painting the state that was just undone. Re-point
@@ -2163,6 +2232,27 @@ class CanvasEditor(QGraphicsView):
             self._update_circle_point_handles(item)
         self._update_mask_handles(item)
         self._update_transform_handles(item)
+
+    def _tick_playback(self) -> None:
+        try:
+            if not self.project.transport.playing:
+                return
+        except RuntimeError:
+            self._playback_timer.stop()
+            return
+        for shape in self.project.shapes:
+            media = getattr(shape, "media", None)
+            if shape.visible and media is not None and (media.is_timed or media.is_live):
+                self.viewport().update()
+                return
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._playback_timer.start()
+
+    def hideEvent(self, event) -> None:
+        self._playback_timer.stop()
+        super().hideEvent(event)
 
     def _snap_point(self, point: QPointF) -> QPointF:
         grid = self.scene.grid_size

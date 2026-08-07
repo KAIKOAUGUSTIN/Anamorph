@@ -346,3 +346,74 @@ def test_test_mode_replaces_the_artwork(project, qapp):
     # No red anywhere: the pattern is greyscale and covers the whole canvas.
     reds = [_at(image, x, y) for x in (40, 160, 280) for y in (40, 120, 200)]
     assert all(abs(r - g) < 60 for r, g, _b in reds), f"artwork leaked into test mode: {reds}"
+
+
+# --- blend modes ------------------------------------------------------------
+
+def _stacked(project, mode, under=(80, 80, 80), over=(80, 80, 80)):
+    from pm.model.shapes import polygon_from_points
+
+    base = polygon_from_points([(0.0, 0.0), (320.0, 0.0), (320.0, 240.0), (0.0, 240.0)])
+    base.fill_color = [*under, 255]
+    base.stroke_width = 0.0
+    top = polygon_from_points([(80.0, 60.0), (240.0, 60.0), (240.0, 180.0), (80.0, 180.0)])
+    top.fill_color = [*over, 255]
+    top.stroke_width = 0.0
+    top.blend_mode = mode
+    project.add_shape(base)
+    project.add_shape(top)
+    return _grab(project)
+
+
+def test_normal_blending_covers_what_is_under_it(project, qapp):
+    image = _stacked(project, "normal", under=(200, 0, 0), over=(0, 0, 200))
+    assert _at(image, 160, 120)[2] > 150
+    assert _at(image, 160, 120)[0] < 80
+
+
+def test_add_brightens_instead_of_replacing(project, qapp):
+    """Two beams on the same wall sum; one does not delete the other."""
+    plain = _at(_stacked(project, "normal"), 160, 120)[0]
+
+    fresh = Project()
+    fresh.canvas.width, fresh.canvas.height = WIDTH, HEIGHT
+    fresh.outputs = [Output(name="Preview")]
+    added = _at(_stacked(fresh, "add"), 160, 120)[0]
+
+    assert added > plain + 40, f"add gave {added}, normal gave {plain}"
+
+
+def test_multiply_darkens(project, qapp):
+    image = _stacked(project, "multiply", under=(200, 200, 200), over=(120, 120, 120))
+    inside = _at(image, 160, 120)[0]
+    outside = _at(image, 20, 20)[0]
+
+    assert inside < outside - 40, f"multiply gave {inside} against {outside}"
+
+
+def test_screen_never_darkens(project, qapp):
+    image = _stacked(project, "screen", under=(120, 120, 120), over=(120, 120, 120))
+    inside = _at(image, 160, 120)[0]
+    outside = _at(image, 20, 20)[0]
+
+    assert inside > outside + 30
+
+
+def test_a_blend_mode_does_not_leak_into_the_next_surface(project, qapp):
+    """The mode is per surface; leaving it set would tint everything after."""
+    from pm.model.shapes import polygon_from_points
+
+    glow = polygon_from_points([(10.0, 10.0), (100.0, 10.0), (100.0, 100.0), (10.0, 100.0)])
+    glow.fill_color = [200, 200, 200, 255]
+    glow.blend_mode = "add"
+    glow.stroke_width = 0.0
+    plain = polygon_from_points([(150.0, 120.0), (300.0, 120.0), (300.0, 220.0), (150.0, 220.0)])
+    plain.fill_color = [0, 0, 200, 255]
+    plain.stroke_width = 0.0
+    project.add_shape(glow)
+    project.add_shape(plain)
+
+    image = _grab(project)
+
+    r, _g, b = _at(image, 220, 170)
+    assert b > 150 and r < 80, "the plain surface composited normally"
