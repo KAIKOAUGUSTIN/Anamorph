@@ -52,6 +52,7 @@ SHORTCUTS: List[Section] = [
     ]),
     ("Playback", [
         ("Space", "Play or pause every clip in the show"),
+        ("B", "Blackout - kill every projector at once, without stopping the show"),
         ("Restart", "Send the show back to zero"),
         ("Speed", "Rate for the whole show; each clip can scale it further"),
     ]),

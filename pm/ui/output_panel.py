@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from pm.model.commands import (
     AddOutputCommand,
+    CanvasSizeCommand,
     OutputSession,
     RemoveOutputCommand,
 )
@@ -206,8 +207,7 @@ class OutputDialog(QDialog):
         width, height = int(self.canvas_width.value()), int(self.canvas_height.value())
         if (canvas.width, canvas.height) == (width, height):
             return
-        canvas.width, canvas.height = width, height
-        self._project.touch()
+        self._undo_stack.push(CanvasSizeCommand(self._project, width, height))
         self.outputs_changed.emit()
 
     def _on_match_canvas(self) -> None:

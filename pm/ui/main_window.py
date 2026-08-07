@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QSplitter,
@@ -214,6 +215,19 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.action_group)
         toolbar.addAction(self.action_ungroup)
 
+        # The panic button. Deliberately its own control rather than a mode of
+        # the transport: pausing leaves the last frame on the wall, and what
+        # you need when something goes wrong is darkness.
+        self.action_blackout = QAction("Blackout", self)
+        self.action_blackout.setCheckable(True)
+        self.action_blackout.setShortcut(QKeySequence("B"))
+        self.action_blackout.setShortcutContext(Qt.ApplicationShortcut)
+        self.action_blackout.setToolTip(
+            "Kill every projector at once, without stopping the show (B).\n"
+            "Pausing would leave the last frame up; this goes dark."
+        )
+        self.addAction(self.action_blackout)
+
         self.action_preview = QAction("Preview", self)
         self.action_preview.setToolTip(
             "Watch what a projector shows - region, keystone, blend and colour\n"
@@ -246,10 +260,21 @@ class MainWindow(QMainWindow):
         )
         toolbar.addAction(self.action_outputs)
         toolbar.addAction(self.action_preview)
+        toolbar.addAction(self.action_blackout)
 
         self.outputs_label = QLabel("")
         self.outputs_label.setStyleSheet("color: #00d4aa; padding: 0 8px;")
         toolbar.addWidget(self.outputs_label)
+
+        # Missing media is the thing you most want to find out about before
+        # doors, not during. It sits in the toolbar and opens the fix.
+        self.missing_button = QPushButton()
+        self.missing_button.setObjectName("warningButton")
+        self.missing_button.setFlat(True)
+        self.missing_button.setVisible(False)
+        self.missing_button.setToolTip("Some media is not where the project expects it")
+        self.missing_button.clicked.connect(lambda: self._open_relink_dialog())
+        toolbar.addWidget(self.missing_button)
 
         toolbar.addSeparator()
 
@@ -423,6 +448,12 @@ class MainWindow(QMainWindow):
         # Screen combo
         self.action_outputs.triggered.connect(lambda _c=False: self._open_output_dialog())
         self.action_preview.triggered.connect(lambda _c=False: self._show_output_preview())
+        self.action_blackout.toggled.connect(self._on_blackout_toggled)
+
+        self.action_relink = QAction("Relink media...", self)
+        self.action_relink.setToolTip("Point the project at media that has moved")
+        self.action_relink.triggered.connect(lambda _c=False: self._open_relink_dialog())
+        self.addAction(self.action_relink)
 
     def _initialize_screens(self) -> None:
         """Load the session project and make sure it has somewhere to project."""
@@ -449,6 +480,30 @@ class MainWindow(QMainWindow):
 
         self._update_outputs_label()
         self.canvas.fit_to_canvas()
+
+    def _open_relink_dialog(self) -> None:
+        from pm.ui.relink_dialog import RelinkDialog
+
+        dialog = RelinkDialog(self.project, self.undo_stack, self)
+        dialog.exec()
+        if dialog.relinked:
+            self.statusBar().showMessage(f"Relinked {dialog.relinked} surface(s)", 5000)
+        self._update_missing_media()
+        self._refresh_object_list()
+        self.canvas.viewport().update()
+
+    def _update_missing_media(self) -> None:
+        """Keep the toolbar honest about what the project cannot find."""
+        from pm.media.availability import forget, missing_paths
+
+        forget()
+        paths = missing_paths(self.project.shapes)
+        self.missing_button.setVisible(bool(paths))
+        if paths:
+            self.missing_button.setText(f"⚠ {len(paths)} missing")
+            self.missing_button.setToolTip(
+                "Media not found:\n" + "\n".join(paths[:8]) + "\n\nClick to relink."
+            )
 
     def _update_outputs_label(self) -> None:
         outputs = self.project.outputs
@@ -600,6 +655,14 @@ class MainWindow(QMainWindow):
             return
         self.property_panel.set_shape(self.project.get_shape(item.model.id))
 
+    def _on_blackout_toggled(self, on: bool) -> None:
+        self.project.set_blackout(on)
+        self.canvas.viewport().update()
+        self.statusBar().showMessage(
+            "BLACKOUT - every projector is dark (B to restore)" if on else "Blackout cleared",
+            0 if on else 3000,
+        )
+
     def _show_help(self) -> None:
         """Non-modal: a reference you can leave open while you work."""
         if getattr(self, "_help_dialog", None) is None:
@@ -695,6 +758,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(messages.get(tool, ""), 3000)
 
     def _refresh_object_list(self) -> None:
+        self._update_missing_media()
         selected_id = None
         items = self.canvas.scene.selectedItems()
         if items:
@@ -788,6 +852,8 @@ class MainWindow(QMainWindow):
         # had just been replaced.
         if hasattr(self, "transport_bar"):
             self.transport_bar.set_project(project)
+        if hasattr(self, "action_blackout"):
+            self.action_blackout.setChecked(project.blackout)
         # Disconnect from whichever project we actually attached to, not from
         # self.project: a project swap repoints that attribute before we get
         # here, and the previous one can stay alive elsewhere, so leaving

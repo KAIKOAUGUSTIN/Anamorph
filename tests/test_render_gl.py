@@ -417,3 +417,44 @@ def test_a_blend_mode_does_not_leak_into_the_next_surface(project, qapp):
 
     r, _g, b = _at(image, 220, 170)
     assert b > 150 and r < 80, "the plain surface composited normally"
+
+
+# --- blackout ---------------------------------------------------------------
+
+def test_blackout_kills_the_frame(project, qapp):
+    """The panic button. Nothing downstream runs, so nothing can leak."""
+    shape = polygon_from_points([(0.0, 0.0), (320.0, 0.0), (320.0, 240.0), (0.0, 240.0)])
+    shape.fill_color = [255, 255, 255, 255]
+    shape.stroke_width = 0.0
+    project.add_shape(shape)
+
+    lit = _at(_grab(project), 160, 120)
+    assert lit[0] > 200
+
+    project.set_blackout(True)
+    dark = _grab(project)
+
+    for x, y in ((10, 10), (160, 120), (310, 230)):
+        assert _is_dark(_at(dark, x, y), threshold=8), f"light left at {x},{y}"
+
+
+def test_blackout_beats_test_mode(project, qapp):
+    """Test mode replaces the artwork; blackout replaces everything."""
+    project.ui_state["test_mode"] = True
+    project.set_blackout(True)
+
+    image = _grab(project)
+
+    assert _is_dark(_at(image, 160, 120), threshold=8)
+
+
+def test_clearing_the_blackout_brings_the_show_back(project, qapp):
+    shape = polygon_from_points([(0.0, 0.0), (320.0, 0.0), (320.0, 240.0), (0.0, 240.0)])
+    shape.fill_color = [255, 255, 255, 255]
+    shape.stroke_width = 0.0
+    project.add_shape(shape)
+    project.set_blackout(True)
+
+    project.set_blackout(False)
+
+    assert _at(_grab(project), 160, 120)[0] > 200
