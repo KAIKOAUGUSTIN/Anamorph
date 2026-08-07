@@ -18,8 +18,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pm.media.availability import is_missing
-from pm.model.shapes import Shape
+from media.availability import is_missing
+from model.shapes import Shape
 
 
 class ObjectList(QWidget):

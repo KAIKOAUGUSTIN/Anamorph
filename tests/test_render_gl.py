@@ -22,9 +22,9 @@ import pytest
 from PySide6.QtCore import QRectF, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter
 
-from pm.model.output import Output
-from pm.model.project import Project
-from pm.model.shapes import (
+from model.output import Output
+from model.project import Project
+from model.shapes import (
     circle_from_center,
     mask_from_rect,
     mesh_from_rect,
@@ -56,7 +56,7 @@ def _grab(project, output=None, size=(WIDTH, HEIGHT)) -> QImage:
     """
     from PySide6.QtWidgets import QApplication
 
-    from pm.render.gl_renderer import GLRenderer
+    from render.gl_renderer import GLRenderer
 
     app = QApplication.instance()
     renderer = GLRenderer(project, output=output or project.outputs[0])
@@ -356,7 +356,7 @@ def test_test_mode_replaces_the_artwork(project, qapp):
 # --- blend modes ------------------------------------------------------------
 
 def _stacked(project, mode, under=(80, 80, 80), over=(80, 80, 80)):
-    from pm.model.shapes import polygon_from_points
+    from model.shapes import polygon_from_points
 
     base = polygon_from_points([(0.0, 0.0), (320.0, 0.0), (320.0, 240.0), (0.0, 240.0)])
     base.fill_color = [*under, 255]
@@ -406,7 +406,7 @@ def test_screen_never_darkens(project, qapp):
 
 def test_a_blend_mode_does_not_leak_into_the_next_surface(project, qapp):
     """The mode is per surface; leaving it set would tint everything after."""
-    from pm.model.shapes import polygon_from_points
+    from model.shapes import polygon_from_points
 
     glow = polygon_from_points([(10.0, 10.0), (100.0, 10.0), (100.0, 100.0), (10.0, 100.0)])
     glow.fill_color = [200, 200, 200, 255]

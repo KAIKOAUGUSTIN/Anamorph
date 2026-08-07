@@ -28,15 +28,15 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from pm.model.commands import EditSession, ShapeEditCommand
-from pm.model.media import MediaRef, SourceRect
-from pm.model.project import Project
-from pm.model.shapes import (
+from model.commands import EditSession, ShapeEditCommand
+from model.media import MediaRef, SourceRect
+from model.project import Project
+from model.shapes import (
     CircleShape, EdgeVisibility, MeshShape, PolygonShape, Shape, convert_shape,
     mask_from_rect, shape_to_dict,
 )
-from pm.ui.source_region import SourceRegionPicker
-from pm.ui.widgets import ArrowSlider, ArrowSpinBox, NoScrollComboBox
+from ui.source_region import SourceRegionPicker
+from ui.widgets import ArrowSlider, ArrowSpinBox, NoScrollComboBox
 
 
 class SectionHeader(QLabel):

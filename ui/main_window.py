@@ -9,7 +9,7 @@ import logging
 
 from typing import Dict, Optional
 
-from PySide6.QtCore import Qt, QSize, QStandardPaths, QTimer
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QKeySequence, QUndoStack
 from PySide6.QtWidgets import (
     QComboBox,
@@ -30,26 +30,27 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from pm.about import APP_NAME
-from pm.io.project_io import load_project, save_project
-from pm.model.commands import (
+from about import APP_NAME
+from app_paths import workspace_base_path
+from fileio.project_io import load_project, save_project
+from model.commands import (
     AddShapeCommand, RemoveShapesCommand, SetGroupCommand, ShapeEditCommand,
     duplicate_shape,
 )
-from pm.model.project import Project
-from pm.model.shapes import Shape, group_members, new_group_id, shape_to_dict
-from pm.model.output import Output
-from pm.media.clip_pool import reset_clip_pool
-from pm.model.project_store import ProjectStore, available_screens, find_screen
-from pm.render.test_pattern import PATTERNS
-from pm.ui.canvas_editor import CanvasEditor
-from pm.ui.output_panel import OutputDialog
-from pm.ui.object_list import ObjectList
-from pm.ui.problem_log import ProblemLog
-from pm.ui.transport_bar import TransportBar
-from pm.ui.property_panel import PropertyPanel
-from pm.ui.projection_window import ProjectionWindow
-from pm.ui.widgets import ArrowSlider, NoScrollComboBox
+from model.project import Project
+from model.shapes import Shape, group_members, new_group_id, shape_to_dict
+from model.output import Output
+from media.clip_pool import reset_clip_pool
+from model.project_store import ProjectStore, available_screens, find_screen
+from render.test_pattern import PATTERNS
+from ui.canvas_editor import CanvasEditor
+from ui.output_panel import OutputDialog
+from ui.object_list import ObjectList
+from ui.problem_log import ProblemLog
+from ui.transport_bar import TransportBar
+from ui.property_panel import PropertyPanel
+from ui.projection_window import ProjectionWindow
+from ui.widgets import ArrowSlider, NoScrollComboBox
 
 
 logger = logging.getLogger(__name__)
@@ -104,15 +105,12 @@ class MainWindow(QMainWindow):
         self._refresh_object_list()
 
     def _get_workspace_base_path(self) -> str:
-        """Get base path for workspace storage using QStandardPaths."""
-        from pathlib import Path
-        # Use QStandardPaths for cross-platform compatibility
-        app_data = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
-        if not app_data:
-            app_data = QStandardPaths.writableLocation(QStandardPaths.HomeLocation)
-        base = Path(app_data) / "ProjectionMapper"
-        base.mkdir(parents=True, exist_ok=True)
-        return str(base)
+        """Where the session copy lives.
+
+        `app_paths` owns this because the directory moved when the app started
+        naming itself, and the move has to carry the previous session with it.
+        """
+        return workspace_base_path()
 
     def _build_ui(self) -> None:
         self.setWindowTitle(APP_NAME)
@@ -565,14 +563,14 @@ class MainWindow(QMainWindow):
             )
 
     def _open_problem_dialog(self) -> None:
-        from pm.ui.problem_log import ProblemDialog
+        from ui.problem_log import ProblemDialog
 
         dialog = ProblemDialog(self.problem_log, self)
         dialog.exec()
         self._refresh_problems_button()
 
     def _open_relink_dialog(self) -> None:
-        from pm.ui.relink_dialog import RelinkDialog
+        from ui.relink_dialog import RelinkDialog
 
         dialog = RelinkDialog(self.project, self.undo_stack, self)
         dialog.exec()
@@ -584,7 +582,7 @@ class MainWindow(QMainWindow):
 
     def _update_missing_media(self) -> None:
         """Keep the toolbar honest about what the project cannot find."""
-        from pm.media.availability import forget, missing_paths
+        from media.availability import forget, missing_paths
 
         forget()
         paths = missing_paths(self.project.shapes)
@@ -625,7 +623,7 @@ class MainWindow(QMainWindow):
         Parented to the outputs dialog when it asked, because that dialog is
         modal and a preview outside it would render but not respond.
         """
-        from pm.ui.output_preview import OutputPreview
+        from ui.output_preview import OutputPreview
 
         preview = getattr(self, "_output_preview", None)
         if preview is not None and parent is not None and preview.parent() is not parent:
@@ -756,7 +754,7 @@ class MainWindow(QMainWindow):
     def _show_help(self) -> None:
         """Non-modal: a reference you can leave open while you work."""
         if getattr(self, "_help_dialog", None) is None:
-            from pm.ui.help_dialog import HelpDialog
+            from ui.help_dialog import HelpDialog
 
             self._help_dialog = HelpDialog(self)
         self._help_dialog.show()
@@ -764,7 +762,7 @@ class MainWindow(QMainWindow):
         self._help_dialog.activateWindow()
 
     def _show_about(self) -> None:
-        from pm.ui.about_dialog import AboutDialog
+        from ui.about_dialog import AboutDialog
 
         AboutDialog(self).exec()
 

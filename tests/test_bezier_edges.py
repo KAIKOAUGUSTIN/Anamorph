@@ -20,8 +20,8 @@ import pytest
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QUndoStack
 
-from pm.model.project import Project
-from pm.model.shapes import (
+from model.project import Project
+from model.shapes import (
     STRAIGHT_C1,
     STRAIGHT_C2,
     EdgeVisibility,
@@ -29,7 +29,7 @@ from pm.model.shapes import (
     shape_from_dict,
     shape_to_dict,
 )
-from pm.render.mesh import (
+from render.mesh import (
     bezier_control_points,
     bezier_local_control,
     cubic_point,
@@ -196,7 +196,7 @@ def test_an_old_file_reads_back_straight():
 
 @pytest.fixture
 def canvas(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     project.add_shape(polygon_from_points(list(QUAD), name="wall"))
@@ -342,7 +342,7 @@ def test_a_curved_edge_snaps_along_its_curve(canvas):
 
 @pytest.fixture
 def panel(qapp):
-    from pm.ui.property_panel import PropertyPanel
+    from ui.property_panel import PropertyPanel
 
     project = Project()
     shape = polygon_from_points(list(QUAD))

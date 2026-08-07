@@ -32,9 +32,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from pm.media.availability import forget, missing_paths
-from pm.model.commands import RelinkMediaCommand
-from pm.model.project import Project
+from media.availability import forget, missing_paths
+from model.commands import RelinkMediaCommand
+from model.project import Project
 
 
 def find_in_folder(path: str, folder: str) -> Optional[str]:

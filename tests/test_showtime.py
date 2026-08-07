@@ -13,12 +13,12 @@ of which decide whether the show happens.
 import pytest
 from PySide6.QtGui import QUndoStack
 
-from pm.media.availability import forget, is_missing, media_exists, missing_paths, missing_shapes
-from pm.model.commands import CanvasSizeCommand, RelinkMediaCommand
-from pm.model.media import MediaRef
-from pm.model.project import Project
-from pm.model.shapes import circle_from_center, mesh_from_rect, polygon_from_points
-from pm.ui.relink_dialog import apply_relink, find_in_folder, relink_map
+from media.availability import forget, is_missing, media_exists, missing_paths, missing_shapes
+from model.commands import CanvasSizeCommand, RelinkMediaCommand
+from model.media import MediaRef
+from model.project import Project
+from model.shapes import circle_from_center, mesh_from_rect, polygon_from_points
+from ui.relink_dialog import apply_relink, find_in_folder, relink_map
 
 QUAD = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
 
@@ -87,7 +87,7 @@ def test_setting_the_same_state_twice_is_a_no_op():
 
 
 def test_the_toolbar_drives_the_blackout(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     try:
@@ -105,7 +105,7 @@ def test_the_toolbar_drives_the_blackout(qapp):
 
 def test_blackout_is_not_pause(qapp):
     """Pausing leaves the last frame on the wall. Those are different needs."""
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     try:
@@ -174,7 +174,7 @@ def test_the_answer_is_cached_but_not_forever(tmp_path):
 
 
 def test_the_layer_list_marks_a_broken_surface(qapp, tmp_path):
-    from pm.ui.object_list import ObjectList
+    from ui.object_list import ObjectList
 
     widget = ObjectList()
     widget.set_shapes([_shape_with(tmp_path / "gone.png", name="broken")])
@@ -183,7 +183,7 @@ def test_the_layer_list_marks_a_broken_surface(qapp, tmp_path):
 
 
 def test_the_layer_list_leaves_a_good_surface_alone(qapp, tmp_path):
-    from pm.ui.object_list import ObjectList
+    from ui.object_list import ObjectList
 
     clip = tmp_path / "clip.png"
     clip.write_bytes(b"x")
@@ -194,7 +194,7 @@ def test_the_layer_list_leaves_a_good_surface_alone(qapp, tmp_path):
 
 
 def test_the_toolbar_counts_what_is_missing(qapp, tmp_path):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     try:
@@ -302,7 +302,7 @@ def test_a_relink_undo_leaves_later_edits_alone(tmp_path):
 
 
 def test_the_relink_dialog_lists_what_is_broken(qapp, tmp_path):
-    from pm.ui.relink_dialog import RelinkDialog
+    from ui.relink_dialog import RelinkDialog
 
     project = Project()
     project.add_shape(_shape_with(tmp_path / "gone.png"))
@@ -315,7 +315,7 @@ def test_the_relink_dialog_lists_what_is_broken(qapp, tmp_path):
 
 
 def test_the_relink_dialog_says_so_when_nothing_is_broken(qapp):
-    from pm.ui.relink_dialog import RelinkDialog
+    from ui.relink_dialog import RelinkDialog
 
     dialog = RelinkDialog(Project())
     try:
@@ -326,7 +326,7 @@ def test_the_relink_dialog_says_so_when_nothing_is_broken(qapp):
 
 
 def test_relinking_through_the_dialog_fixes_the_project(qapp, tmp_path):
-    from pm.ui.relink_dialog import RelinkDialog
+    from ui.relink_dialog import RelinkDialog
 
     new = tmp_path / "new"
     new.mkdir()
@@ -367,8 +367,8 @@ def test_a_canvas_size_is_never_zero():
 
 
 def test_typing_a_canvas_size_in_the_dialog_is_undoable(qapp):
-    from pm.model.output import Output
-    from pm.ui.output_panel import OutputDialog
+    from model.output import Output
+    from ui.output_panel import OutputDialog
 
     project = Project()
     project.outputs = [Output(name="Projector 1")]

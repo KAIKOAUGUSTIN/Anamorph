@@ -9,8 +9,8 @@ from dataclasses import dataclass, field
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from pm.model.effects import Effects
-from pm.model.media import MediaRef
+from model.effects import Effects
+from model.media import MediaRef
 
 
 # A new surface's name. The interface is in English, and these were the last
@@ -256,7 +256,7 @@ class PolygonShape:
 
     def outline(self, samples: int = 16) -> List[Tuple[float, float]]:
         """The boundary as drawn: vertices for straight edges, samples for curves."""
-        from pm.render.mesh import polygon_outline
+        from render.mesh import polygon_outline
 
         return polygon_outline(self.points, self.curve_pairs(), samples)
 
@@ -418,7 +418,7 @@ class MeshShape:
         the density adds detail without moving anything the operator already
         placed.
         """
-        from pm.render.mesh import tessellate_mesh
+        from render.mesh import tessellate_mesh
 
         rows = max(1, int(rows))
         cols = max(1, int(cols))

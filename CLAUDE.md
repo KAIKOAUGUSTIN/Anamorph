@@ -25,11 +25,12 @@ python projection_gui.py
 
 ### Module Structure
 
-- `projection_gui.py` - Thin CLI entry point, delegates to `pm.app_main.run()`
-- `pm/app_main.py` - Application initialization: QApplication setup, high DPI config, theme application
-- `pm/about.py` - Name, version, copyright and licence in one place, with no Qt import - read by the About box, and by packaging later
+- `projection_gui.py` - Thin CLI entry point, delegates to `app_main.run()`
+- `app_main.py` - Application initialization: QApplication setup, high DPI config, theme application
+- `about.py` - Name, version, copyright, licence and `PACKAGES` (the app's own top-level modules) in one place, with no Qt import - read by the About box, and by packaging later
+- `app_paths.py` - Where the session copy lives, and carrying it across when the app's name moves `AppDataLocation`
 
-- `pm/model/` - Data models (dataclasses, no Qt dependency)
+- `model/` - Data models (dataclasses, no Qt dependency)
   - `project.py` - Project root with CanvasSettings, shape list, media library; emits `changed` signal via QObject inheritance
   - `shapes.py` - PolygonShape (per-edge visibility and bezier controls), CircleShape and MeshShape dataclasses, plus `Mask`; serialized via `shape_to_dict`/`shape_from_dict`
   - `media.py` - MediaRef (image/video) with fit modes, UV transform, and `SourceRect` (which region of the media feeds the surface)
@@ -40,7 +41,7 @@ python projection_gui.py
   - `output.py` - `Output` (canvas region, keystone, `EdgeBlend`, `ColorCorrection`) and `split_outputs`
   - `project_store.py` - Loads/saves the one session project; migrates the old per-screen workspaces
 
-- `pm/ui/` - Qt6/PySide6 UI components
+- `ui/` - Qt6/PySide6 UI components
   - `main_window.py` - Central window with toolbar, splitter layout, menus, and screen selection
   - `canvas_editor.py` - Interactive QGraphicsView for shape editing; vertex handles plus move/rotate/scale gestures
   - `projection_window.py` - Full-screen projection output window
@@ -57,7 +58,7 @@ python projection_gui.py
 - `styles.py` - Studio Dark Luxury theme with cyan accents; provides `STUDIO_DARK_QSS` stylesheet and `COLORS` palette for consistent UI styling
 - `widgets.py` - Keyboard-friendly widgets: `ArrowSlider`/`ArrowSpinBox` for arrow-key navigation, and a `NoScrollMixin` so the wheel cannot edit a field it merely rolled past
 
-- `pm/render/` - Rendering subsystem
+- `render/` - Rendering subsystem
   - `gl_renderer.py` - `QOpenGLWidget` renderer with GLSL shaders; uploads media as GL textures and caches them per path
   - `shaders.py` - GLSL sources: shared vertex shader plus texture/solid/stroke fragment shaders
   - `homography.py` - Corner-pin math (numpy only, no Qt/GL), shared by the renderer and the editor preview
@@ -66,14 +67,29 @@ python projection_gui.py
   - `test_pattern.py` - Calibration images (grid / checkerboard / borders) drawn with QPainter
   - `mesh.py` - All the CPU-side geometry: earcut triangulation with holes (`triangulate_with_holes`), the Catmull-Rom patch behind `MeshShape` (`tessellate_mesh`/`mesh_outline`), and the cubic-edge sampling behind curved polygons (`bezier_control_points`/`polygon_outline`)
 
-- `pm/media/` - Media handling
+- `media/` - Media handling
   - `availability.py` - Which media the project can actually find, cached briefly
   - `clip_pool.py` - Every open decoder, shared and keyed by what it is playing; the show clock drives them
   - `image_cache.py` - mtime-keyed QImage cache for the editor viewport (paint runs every frame)
 
-- `pm/io/` - Serialization
+- `fileio/` - Serialization
   - `project_io.py` - JSON save/load with `.pmap.json` extension; atomic write, `.bak` of the previous version
   - `media_paths.py` - Media paths relative to the project file, so a show folder can be moved
+
+### Layout
+
+The modules sit at the repository root - `model/`, `ui/`, `render/`, `media/`,
+`fileio/` - rather than under a `pm/` package.
+
+`fileio/` is not called `io/` for a hard reason, not a stylistic one: a
+top-level `io` package is **unimportable**. CPython imports the standard
+library's `io` during interpreter startup, so it is already in `sys.modules`
+before any path of ours is consulted, and `from io.project_io import ...`
+fails with "'io' is not a package". Renaming it back would break the app at
+import time.
+
+`pytest.ini` sets `pythonpath = .` because the repository is not installed as
+a package, so the root has to be on `sys.path` for any of these to import.
 
 ### Key Design Patterns
 
@@ -86,7 +102,7 @@ python projection_gui.py
 
    A polygon with a corner pin describes a *flat* plane seen off-axis. A column, a cylinder, a dome or a hung cloth is curved, and no arrangement of four corners can express that - the surface has to bend *between* its corners. `MeshShape` is that surface.
 
-   The control grid is coarse because it is what a person drags; `tessellate_mesh` (`pm/render/mesh.py`) smooths it into a dense render mesh with a **Catmull-Rom** patch, which passes *through* every control point - what the operator positions is exactly where the surface goes, with curvature filled in between. Neighbour lookup at the boundary clamps rather than wraps (`_clamped`): wrapping would pull the far edge of the surface into the near one.
+   The control grid is coarse because it is what a person drags; `tessellate_mesh` (`render/mesh.py`) smooths it into a dense render mesh with a **Catmull-Rom** patch, which passes *through* every control point - what the operator positions is exactly where the surface goes, with curvature filled in between. Neighbour lookup at the boundary clamps rather than wraps (`_clamped`): wrapping would pull the far edge of the surface into the near one.
 
    UVs come from the parametric grid position, not from canvas coordinates, so media flows *along* the bend; `source_rect` and `MediaTransform` still compose on top in the shader. Per-vertex UVs are honest here only because the patch is subdivided - across a coarse cell the interpolation error would be visible, across a subdivided one it is far below a pixel.
 
@@ -96,7 +112,7 @@ python projection_gui.py
 
 3. **Media Mapping**: UVs come from the shape's fit mode (`stretch`/`contain`/`cover`), computed per vertex in `_compute_fit_uvs`.
 
-   The `warp` fit mode - shown in the UI as **Corner pin** - is different and is the mode that matters for projection mapping. A four-point polygon gets a homography from `canvas_to_uv_matrix` (`pm/render/homography.py`), uploaded as the `u_uv_matrix` uniform and divided **per fragment** in `FRAGMENT_SHADER_TEXTURE`. Interpolating UVs per vertex instead would bend the image along the triangulation diagonal, which is the classic broken-mapping artifact. Per-vertex UVs are still uploaded as a fallback for degenerate quads.
+   The `warp` fit mode - shown in the UI as **Corner pin** - is different and is the mode that matters for projection mapping. A four-point polygon gets a homography from `canvas_to_uv_matrix` (`render/homography.py`), uploaded as the `u_uv_matrix` uniform and divided **per fragment** in `FRAGMENT_SHADER_TEXTURE`. Interpolating UVs per vertex instead would bend the image along the triangulation diagonal, which is the classic broken-mapping artifact. Per-vertex UVs are still uploaded as a fallback for degenerate quads.
 
    The editor mirrors this with `QTransform.quadToQuad` in `canvas_editor._paint_media`, so the canvas preview and the projected output agree. Corner-to-UV pairing is by proximity to the bounding box (`corner_uv_assignment`), not vertex index, so the media stays put while a corner is dragged.
 
@@ -122,7 +138,7 @@ python projection_gui.py
 
    A click on a handle is never a click on the body. `_body_item_at` returns None for every handle type; without that, handles parented to a shape item (curve and mask controls) resolved to their parent, the view started a body gesture and swallowed every move event the handle needed. And the view's press handler *returns* instead of falling through to `QGraphicsView`, which would otherwise select the item under the cursor and clear everything else - the reason a Ctrl-built selection, and a group, used to flicker and collapse the moment it was clicked. Clicking empty canvas clears the selection; *dragging* empty canvas pans and keeps it.
 
-6. **Undo**: Commands are snapshot-based (`pm/model/commands.py`), storing a shape's serialised state before and after an edit and swapping them - shapes are mutated in place during a drag, so there is no inverse to replay. `EditSession` snapshots on mouse press and pushes on release, making a drag one undo step; `ShapeEditCommand.mergeWith` collapses same-labelled edits to the same shape within a short window, which is what keeps a slider drag from filling the stack.
+6. **Undo**: Commands are snapshot-based (`model/commands.py`), storing a shape's serialised state before and after an edit and swapping them - shapes are mutated in place during a drag, so there is no inverse to replay. `EditSession` snapshots on mouse press and pushes on release, making a drag one undo step; `ShapeEditCommand.mergeWith` collapses same-labelled edits to the same shape within a short window, which is what keeps a slider drag from filling the stack.
 
    Anything that mutates a shape must go through a command, or it will be silently un-undoable. In the property panel that means calling `self._commit("Label")` instead of emitting `shape_changed` directly.
 
@@ -154,7 +170,7 @@ python projection_gui.py
 
    Selecting one member selects the whole group, and the bounding box spans it: a group that looked like a single shape until something moved unexpectedly would be worse than no group at all. `Ctrl`+click adds a loose shape to the selection; the layer list numbers each group so membership is legible when a facade has four of them.
 
-10. **Snapping**: `find_snap` (`pm/model/snapping.py`) prefers a vertex, then an edge, then the grid. Mesh control points pass `grid=False`: the grid is a placement aid for whole surfaces, and on a bend it quantises the one thing a mesh exists to express. The dragged shape is excluded from its own candidates - its adjacent edges are zero pixels away and would pin the vertex in place. The threshold is in screen pixels, divided by the zoom before use, so the magnet feels constant to the hand.
+10. **Snapping**: `find_snap` (`model/snapping.py`) prefers a vertex, then an edge, then the grid. Mesh control points pass `grid=False`: the grid is a placement aid for whole surfaces, and on a bend it quantises the one thing a mesh exists to express. The dragged shape is excluded from its own candidates - its adjacent edges are zero pixels away and would pin the vertex in place. The threshold is in screen pixels, divided by the zoom before use, so the magnet feels constant to the hand.
 
 11. **Input space**: `MediaRef.source_rect` (a `SourceRect`) says *which part* of the media feeds a surface, independent of where that surface sits. One clip can drive six surfaces, each taking a different region. It is applied last in the UV chain - after fit, corner pin and `MediaTransform` - in `FRAGMENT_SHADER_TEXTURE`, and mirrored in `canvas_editor._paint_media`. Aspect ratio and pixel offsets are measured against the *region*, not the whole file.
 
@@ -166,9 +182,19 @@ Everything non-fatal used to end at `logger.warning`, in a console nobody
 watches during a show. `ProblemLog` is a **logging handler**, not a rewrite of
 every call site: those calls are already in the right places and already say
 the right thing, and what was missing was somewhere for them to arrive.
-Anything at WARNING or above under the `pm` package shows up in the toolbar
-and in a dialog - which also means a failure added later is visible without
-anyone remembering to wire it.
+Anything this app logs at WARNING or above shows up in the toolbar and in a
+dialog - which also means a failure added later is visible without anyone
+remembering to wire it.
+
+The handler sits on the **root** logger. It used to sit on `pm`, which was
+the one ancestor every module in the app shared; flattening the layout took
+that ancestor away, so `about.PACKAGES` lists the app's own top-level modules
+and the handler drops everything else - a decoding library complaining about
+a colour profile is not something anyone can act on mid-show. A module left
+off that list fails *silently*: its warnings are logged and never shown, which
+is exactly what happened to `app_paths` the day it was written.
+`tests/test_problems.py` now walks the tracked files and fails if any
+top-level module is missing from it.
 
 Two things stay modal, because they block rather than inform: a save that did
 not happen, and a project that would not open. Everything else is a status
@@ -188,7 +214,7 @@ canvas to say the projectors are dark.
 
 A missing file used to be silent - the surface simply came up empty, which in
 a dark room reads as "I mapped it wrong" rather than "the drive is not
-plugged in". `pm/media/availability.py` answers the question with a one-second
+plugged in". `media/availability.py` answers the question with a one-second
 cache, because it is asked once per layer-list repaint and a `stat` per surface
 has no business in the frame budget. Broken surfaces are hatched in red on the
 canvas, marked in the layer list, and counted in the toolbar; the count opens
@@ -197,7 +223,7 @@ pointing at one file's new home is taken as an offer to find its neighbours.
 
 ### Media playback
 
-Clips do not run on their own clocks. `Project.transport` (`pm/model/transport.py`)
+Clips do not run on their own clocks. `Project.transport` (`model/transport.py`)
 is monotonic wall time scaled by `speed`, and every decoder reads its position
 from there. That is what makes one button stop the whole show, and what makes a
 stalled file unable to drag the rest of it back.
@@ -242,7 +268,7 @@ surface" for now: there is no multi-layer compositing inside a single surface.
 
 ### Files, autosave and recovery
 
-`.pmap.json` stores media paths **relative to itself** (`pm/io/media_paths.py`)
+`.pmap.json` stores media paths **relative to itself** (`fileio/media_paths.py`)
 when the media is within a few hops of the project - the case where the folder
 travels as one piece. Anything further away keeps its absolute path, because a
 media server is not part of the show. Only the file is relative: the in-memory
@@ -293,7 +319,7 @@ already set. It can also be typed, or matched to the selected projector.
 ### Naming
 
 New surfaces are called `Polygon`, `Circle`, `Mesh` (`DEFAULT_*_NAME` in
-`pm/model/shapes.py`). They used to be Portuguese in an English interface,
+`model/shapes.py`). They used to be Portuguese in an English interface,
 which reads as a bug rather than a choice. Existing projects are unaffected -
 a shape's name travels with the shape.
 
@@ -302,7 +328,7 @@ a shape's name travels with the shape.
 **GPL-3.0-or-later**, and the repository is built so it stays that way without
 anyone having to remember.
 
-`pm/about.py` is the single source: name, version, copyright, the SPDX
+`about.py` is the single source: name, version, copyright, the SPDX
 identifier and the four facts GPL-3 section 0 calls "Appropriate Legal
 Notices". The About box, the README and any future installer read from there
 rather than each carrying their own copy to drift out of sync. It has no Qt
@@ -326,12 +352,26 @@ their copyright, so nobody - including the owner - can relicense the project
 without asking all of them. It is the mechanism that makes "this will stay
 free" structural rather than a promise.
 
-`app_main` sets `setApplicationDisplayName`/`setApplicationVersion` and
-deliberately **not** `setApplicationName`/`setOrganizationName`:
-`QStandardPaths` derives `AppDataLocation` from those two, so setting them
-would move the session file out from under anyone holding unsaved work. The
-crash net would come up empty exactly once, silently, on the release that
-"just named the app properly".
+### The session directory, and the app's name
+
+`app_main` sets `setApplicationName`/`setOrganizationName`, which is what
+makes the session copy land in a folder called Anamorph rather than one named
+after whichever interpreter launched it.
+
+`QStandardPaths` derives `AppDataLocation` from exactly those two, so setting
+them **moves** the session directory - and the session copy is the only place
+an hour of unsaved work exists. A release that silently relocated it would
+empty the crash net exactly once, at the one moment it matters.
+
+So `app_paths.py` performs the move rather than allowing it. `app_main` calls
+`remember_legacy_app_data()` *before* renaming anything, because afterwards
+the old location is no longer computable - it depended on the executable's
+name, which differs between running from source and running a build. The
+first `workspace_base_path()` under the new name copies the previous session
+across. Copy, not move: an operator who goes back to an older build still
+finds their session where they left it, and nothing already in the new
+location is overwritten, so a second run cannot drag a stale session back
+over a newer one.
 
 ### File Format
 
@@ -431,6 +471,7 @@ pytest
 - `tests/test_playback.py` - the show clock, decoder sharing, loop/offset/rate, the transport bar
 - `tests/test_showtime.py` - blackout, missing-media detection, relinking, the undo gaps
 - `tests/test_problems.py` - the problem log, the real call sites reaching it, and that the help sheet's keys are bound
+- `tests/test_app_paths.py` - the session surviving the rename: carried across, original left alone, current work never overwritten
 - `tests/test_licensing.py` - the SPDX header on every tracked `.py`, a notice for every dependency, the DCO quoted in full, and the About box carrying the notices the GPL asks for
 - `tests/test_render_gl.py` - **pixels**: what actually lands on the projector
 
@@ -448,12 +489,22 @@ letterboxing, the output pass (region crop, blend ramp, colour), the four
 blend modes and the blackout. Each one was verified to fail when its fix is
 reverted.
 
-CI runs the suite twice: once on the `offscreen` platform, and once under
-xvfb+Mesa for `test_render_gl.py`. The second job also fails if those tests
-*skip* - a skipped pixel suite is a green tick that proves nothing.
+CI runs **one job per test file**, so a red tick in the checks list names the
+area instead of saying "the suite". The list is discovered from the repository
+by a `discover` job rather than written into the workflow, so a new suite
+cannot be silently left out of CI, and `fail-fast: false` keeps one red suite
+from cancelling the rest.
+
+Three jobs sit alongside the matrix: `whole suite (no path argument)`, which
+runs bare `pytest` because that is a *different* `sys.path` setup from
+`pytest tests/test_x.py` and the suite once passed one way while failing to
+import the other; and `render_gl (OpenGL)` under xvfb+Mesa, which also fails
+if those tests *skip* - a skipped pixel suite is a green tick that proves
+nothing. The shared install lives in `.github/actions/setup`, since copying it
+into two dozen jobs is how it drifts.
 
 `pytest.ini` sets `pythonpath = .`, because the repo is not installed as a
-package and `pm` is therefore only importable when the repo root is on
+package and its modules are therefore only importable when the repo root is on
 `sys.path`. Pytest puts it there when invoked with no path argument and *not*
 when invoked as `pytest tests/test_x.py`, so the suite used to pass one way
 and fail to import the other. The two CI jobs now use both invocation forms

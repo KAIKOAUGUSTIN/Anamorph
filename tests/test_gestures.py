@@ -9,9 +9,9 @@ import pytest
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QUndoStack
 
-from pm.model.commands import duplicate_shape
-from pm.model.project import Project
-from pm.model.shapes import circle_from_center, polygon_from_points
+from model.commands import duplicate_shape
+from model.project import Project
+from model.shapes import circle_from_center, polygon_from_points
 
 QUAD = [(100.0, 100.0), (200.0, 100.0), (200.0, 200.0), (100.0, 200.0)]
 CENTRE = (150.0, 150.0)
@@ -19,7 +19,7 @@ CENTRE = (150.0, 150.0)
 
 @pytest.fixture
 def canvas(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     project.add_shape(polygon_from_points(list(QUAD), name="wall"))
@@ -113,7 +113,7 @@ def test_scaling_cannot_collapse_the_shape(canvas):
 
 
 def test_circle_scales_both_radii(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     circle = circle_from_center((150.0, 150.0), 50.0)
@@ -186,7 +186,7 @@ def test_a_second_click_swaps_to_the_vertices(canvas):
 
 
 def test_selecting_something_else_goes_back_to_the_grips(canvas):
-    from pm.model.shapes import polygon_from_points
+    from model.shapes import polygon_from_points
 
     other = polygon_from_points([(400.0, 400.0), (500.0, 400.0), (500.0, 500.0)])
     canvas.project.add_shape(other)
@@ -293,7 +293,7 @@ def test_releasing_a_grip_commits_one_undo_step(canvas):
 
 
 def test_grips_track_a_circle_by_its_radii(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     circle = circle_from_center((150.0, 150.0), 50.0)
@@ -345,7 +345,7 @@ def test_duplicate_of_a_circle_moves_centre_and_anchors():
 
 
 def test_duplicate_is_undoable(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     window = MainWindow()
     try:
@@ -366,7 +366,7 @@ def test_duplicate_is_undoable(qapp):
 # --- solo ----------------------------------------------------------------
 
 def test_solo_hides_everything_else_and_toggles_back(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     window = MainWindow()
     try:
@@ -385,7 +385,7 @@ def test_solo_hides_everything_else_and_toggles_back(qapp):
 
 
 def test_solo_is_a_single_undo_step(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     window = MainWindow()
     try:

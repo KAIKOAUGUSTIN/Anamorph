@@ -5,7 +5,7 @@
 
 import pytest
 
-from pm.model.snapping import (
+from model.snapping import (
     EDGE,
     GRID,
     VERTEX,
@@ -136,9 +136,9 @@ NEIGHBOUR = [(140.0, 0.0), (240.0, 0.0), (240.0, 100.0), (140.0, 100.0)]
 
 @pytest.fixture
 def canvas(qapp):
-    from pm.model.project import Project
-    from pm.model.shapes import polygon_from_points
-    from pm.ui.canvas_editor import CanvasEditor
+    from model.project import Project
+    from model.shapes import polygon_from_points
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     project.add_shape(polygon_from_points(list(PANEL), name="panel"))

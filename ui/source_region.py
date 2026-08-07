@@ -21,8 +21,8 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
-from pm.media.image_cache import get_qimage
-from pm.model.media import SourceRect
+from media.image_cache import get_qimage
+from model.media import SourceRect
 
 _ACCENT = QColor(0, 212, 170)
 _DIM = QColor(120, 120, 128)
@@ -64,7 +64,7 @@ class SourceRegionPicker(QWidget):
     def source_image(self):
         """The image behind the rectangle: a still, or the clip's current frame."""
         if self._media is not None and getattr(self._media, "kind", None) in ("video", "camera"):
-            from pm.ui.canvas_editor import media_frame
+            from ui.canvas_editor import media_frame
 
             return media_frame(self._media, self._transport)
         return get_qimage(self._path)

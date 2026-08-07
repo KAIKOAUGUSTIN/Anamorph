@@ -20,8 +20,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from pm.model.shapes import CircleShape, MeshShape, PolygonShape, active_masks
-from pm.render.mesh import (
+from model.shapes import CircleShape, MeshShape, PolygonShape, active_masks
+from render.mesh import (
     circle_ring,
     tessellate_mesh,
     triangulate_circle,

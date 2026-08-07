@@ -35,7 +35,7 @@ from typing import Dict, Optional, Tuple
 import cv2
 import numpy as np
 
-from pm.model.media import MediaRef, Playback
+from model.media import MediaRef, Playback
 
 logger = logging.getLogger(__name__)
 

@@ -6,14 +6,14 @@
 import pytest
 from PySide6.QtGui import QUndoStack
 
-from pm.model.commands import (
+from model.commands import (
     AddShapeCommand,
     EditSession,
     RemoveShapesCommand,
     ShapeEditCommand,
 )
-from pm.model.project import Project
-from pm.model.shapes import polygon_from_points, shape_to_dict
+from model.project import Project
+from model.shapes import polygon_from_points, shape_to_dict
 
 QUAD = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
 MOVED = [(10.0, 10.0), (110.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
@@ -169,7 +169,7 @@ def test_edits_to_different_shapes_do_not_merge(project, stack):
 
 def test_canvas_drag_becomes_one_undo_step(project, stack):
     """Exercises the wiring the canvas uses: snapshot on press, push on release."""
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     shape = polygon_from_points(list(QUAD))
     project.add_shape(shape)
@@ -189,7 +189,7 @@ def test_canvas_drag_becomes_one_undo_step(project, stack):
 
 
 def test_canvas_click_without_movement_adds_nothing(project, stack):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     shape = polygon_from_points(list(QUAD))
     project.add_shape(shape)
@@ -222,7 +222,7 @@ def test_undo_marks_the_project_changed(project, stack):
 
 def test_undo_moves_what_the_canvas_is_actually_drawing(project, stack):
     from PySide6.QtCore import QPointF, Qt
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     shape = polygon_from_points(list(QUAD))
     project.add_shape(shape)
@@ -246,7 +246,7 @@ def test_undo_moves_what_the_canvas_is_actually_drawing(project, stack):
 
 def test_two_panel_edits_in_a_row_both_land(qapp, project, stack):
     """The second edit used to be written to an orphaned shape."""
-    from pm.ui.property_panel import PropertyPanel
+    from ui.property_panel import PropertyPanel
 
     shape = polygon_from_points(list(QUAD))
     project.add_shape(shape)

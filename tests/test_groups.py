@@ -17,9 +17,9 @@ import pytest
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QUndoStack
 
-from pm.model.commands import SetGroupCommand
-from pm.model.project import Project
-from pm.model.shapes import (
+from model.commands import SetGroupCommand
+from model.project import Project
+from model.shapes import (
     circle_from_center,
     group_members,
     new_group_id,
@@ -105,7 +105,7 @@ def test_grouping_leaves_the_geometry_alone(project):
 
 @pytest.fixture
 def canvas(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     project.add_shape(polygon_from_points(list(LEFT), name="left"))
@@ -277,7 +277,7 @@ def test_a_circle_in_a_group_travels_rather_than_spinning_in_place(canvas):
 
 @pytest.fixture
 def window(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     for points, name in ((LEFT, "left"), (RIGHT, "right")):

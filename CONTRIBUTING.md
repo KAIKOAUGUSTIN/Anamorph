@@ -117,19 +117,22 @@ is there.
 pytest
 ```
 
-531 tests, all offscreen. The rendering tests need a real OpenGL context and
+622 tests, all offscreen. The rendering tests need a real OpenGL context and
 skip without one; to run those for real:
 
 ```bash
 xvfb-run -a env QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 pytest
 ```
 
-CI runs both, and fails if the rendering tests *skip* — a skipped pixel suite
-is a green tick that proves nothing.
+CI runs one job per test file, so a red tick names the area rather than
+saying "the suite", plus one job running the whole suite with no path
+argument (a different `sys.path` setup) and one for the rendering tests. It
+fails if the rendering tests *skip* — a skipped pixel suite is a green tick
+that proves nothing.
 
 A few things this codebase cares about, which will come up in review:
 
-- **Anything that mutates a shape goes through a command** (`pm/model/commands.py`),
+- **Anything that mutates a shape goes through a command** (`model/commands.py`),
   or it is silently un-undoable.
 - **The editor and the projector must agree.** A preview that composites
   differently from the output is the failure this project has spent the most

@@ -10,9 +10,9 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QObject, Signal
 
-from pm.model.output import Output
-from pm.model.transport import Transport
-from pm.model.shapes import Shape, shape_from_dict, shape_to_dict
+from model.output import Output
+from model.transport import Transport
+from model.shapes import Shape, shape_from_dict, shape_to_dict
 
 
 @dataclass

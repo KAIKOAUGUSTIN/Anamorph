@@ -30,8 +30,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pm.model.project import Project
-from pm.ui.widgets import NoScrollComboBox
+from model.project import Project
+from ui.widgets import NoScrollComboBox
 
 
 class OutputPreview(QDialog):
@@ -130,7 +130,7 @@ class OutputPreview(QDialog):
             return
 
         try:
-            from pm.render.gl_renderer import GLRenderer
+            from render.gl_renderer import GLRenderer
 
             renderer = GLRenderer(self._project, self._holder, output=output)
         except Exception as exc:  # pragma: no cover - depends on the GL driver

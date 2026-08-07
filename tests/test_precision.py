@@ -7,16 +7,16 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeyEvent, QUndoStack
 
-from pm.model.project import Project
-from pm.model.shapes import circle_from_center, polygon_from_points
-from pm.ui.widgets import ArrowSpinBox
+from model.project import Project
+from model.shapes import circle_from_center, polygon_from_points
+from ui.widgets import ArrowSpinBox
 
 QUAD = [(10.0, 20.0), (110.0, 20.0), (110.0, 120.0), (10.0, 120.0)]
 
 
 @pytest.fixture
 def canvas(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     project.add_shape(polygon_from_points(list(QUAD), name="quad"))
@@ -93,7 +93,7 @@ def test_locked_shapes_ignore_nudges(canvas):
 
 
 def test_circle_nudge_moves_centre_and_anchors(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     circle = circle_from_center((100.0, 100.0), 40.0)
@@ -109,7 +109,7 @@ def test_circle_nudge_moves_centre_and_anchors(qapp):
 
 
 def _circle_canvas(rx, ry):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     circle = circle_from_center((200.0, 200.0), 50.0)
@@ -186,7 +186,7 @@ def test_arming_a_vertex_clears_when_selection_moves_away(canvas):
 
 @pytest.fixture
 def panel(qapp):
-    from pm.ui.property_panel import PropertyPanel
+    from ui.property_panel import PropertyPanel
 
     project = Project()
     widget = PropertyPanel()

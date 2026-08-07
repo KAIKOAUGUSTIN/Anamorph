@@ -5,17 +5,17 @@
 
 import pytest
 
-from pm.io.project_io import load_project, save_project
-from pm.model.media import SourceRect
-from pm.model.output import (
+from fileio.project_io import load_project, save_project
+from model.media import SourceRect
+from model.output import (
     ColorCorrection,
     EdgeBlend,
     IDENTITY_CORNERS,
     Output,
     split_outputs,
 )
-from pm.model.project import Project
-from pm.model.shapes import polygon_from_points
+from model.project import Project
+from model.shapes import polygon_from_points
 
 
 # --- the blend curve --------------------------------------------------------

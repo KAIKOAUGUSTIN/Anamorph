@@ -16,11 +16,11 @@ import time
 import numpy as np
 import pytest
 
-from pm.media.clip_pool import Clip, ClipPool, clip_key, reset_clip_pool
-from pm.model.media import MediaRef, Playback
-from pm.model.project import Project
-from pm.model.shapes import polygon_from_points, shape_from_dict, shape_to_dict
-from pm.model.transport import MAX_SPEED, MIN_SPEED, Transport
+from media.clip_pool import Clip, ClipPool, clip_key, reset_clip_pool
+from model.media import MediaRef, Playback
+from model.project import Project
+from model.shapes import polygon_from_points, shape_from_dict, shape_to_dict
+from model.transport import MAX_SPEED, MIN_SPEED, Transport
 
 QUAD = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
 
@@ -188,7 +188,7 @@ def test_a_file_from_before_playback_existed_loads_with_defaults():
 
 
 def test_playback_travels_with_a_duplicated_surface():
-    from pm.model.commands import duplicate_shape
+    from model.commands import duplicate_shape
 
     shape = polygon_from_points(list(QUAD))
     shape.media.kind = "video"
@@ -406,14 +406,14 @@ def test_stopping_the_pool_closes_everything(clip_file):
 # --- blend modes ------------------------------------------------------------
 
 def test_every_blend_mode_maps_to_a_gl_pair():
-    from pm.render.gl_renderer import GLRenderer
+    from render.gl_renderer import GLRenderer
 
     for mode in ("normal", "add", "screen", "multiply"):
         assert mode in GLRenderer.BLEND_MODES
 
 
 def test_an_unknown_blend_mode_falls_back_to_normal():
-    from pm.render.gl_renderer import GLRenderer
+    from render.gl_renderer import GLRenderer
 
     assert GLRenderer.BLEND_MODES.get("nonsense", GLRenderer.BLEND_MODES["normal"]) == (
         GLRenderer.BLEND_MODES["normal"]
@@ -430,7 +430,7 @@ def test_blend_mode_round_trips_through_the_file():
 
 @pytest.fixture
 def panel(qapp):
-    from pm.ui.property_panel import PropertyPanel
+    from ui.property_panel import PropertyPanel
 
     project = Project()
     shape = polygon_from_points(list(QUAD), name="wall")
@@ -484,7 +484,7 @@ def test_the_blend_combo_reaches_the_model(panel):
 
 
 def test_the_transport_bar_drives_the_project(qapp):
-    from pm.ui.transport_bar import TransportBar, format_time
+    from ui.transport_bar import TransportBar, format_time
 
     project = Project()
     bar = TransportBar(project)
@@ -509,7 +509,7 @@ def test_the_transport_bar_drives_the_project(qapp):
 
 
 def test_the_clock_reads_like_a_clock():
-    from pm.ui.transport_bar import format_time
+    from ui.transport_bar import format_time
 
     assert format_time(0.0) == "0:00.0"
     assert format_time(65.4) == "1:05.4"
@@ -517,7 +517,7 @@ def test_the_clock_reads_like_a_clock():
 
 
 def test_space_toggles_the_show(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     try:
@@ -530,7 +530,7 @@ def test_space_toggles_the_show(qapp):
 
 
 def test_the_canvas_only_ticks_for_moving_media(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     still = polygon_from_points(list(QUAD))
@@ -552,7 +552,7 @@ def test_the_canvas_only_ticks_for_moving_media(qapp):
 
 
 def test_the_canvas_hands_its_items_the_show_clock(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     shape = polygon_from_points(list(QUAD))

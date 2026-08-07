@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from pm.about import COPYRIGHT, LICENSE_ID, VERSION, legal_notice
+from about import COPYRIGHT, LICENSE_ID, VERSION, legal_notice
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -64,8 +64,8 @@ def test_every_source_file_carries_the_notice(name):
 
 
 def test_the_headers_agree_with_the_declared_licence():
-    """`pm.about` and the file headers must not drift apart."""
-    header = (ROOT / "pm" / "about.py").read_text(encoding="utf-8")
+    """`about` and the file headers must not drift apart."""
+    header = (ROOT / "about.py").read_text(encoding="utf-8")
     assert SPDX in header
     assert LICENSE_ID == "GPL-3.0-or-later", (
         "the version is a decision, not an accident - changing it is a "
@@ -154,7 +154,7 @@ def test_the_notice_carries_the_four_facts_the_gpl_asks_for():
 
 
 def test_the_about_box_shows_the_notice(qapp):
-    from pm.ui.about_dialog import AboutDialog
+    from ui.about_dialog import AboutDialog
 
     from PySide6.QtWidgets import QLabel
 
@@ -171,7 +171,7 @@ def test_the_about_box_shows_the_notice(qapp):
 
 def test_the_help_menu_reaches_it(qapp):
     """An About box nothing opens is an About box that does not exist."""
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     try:

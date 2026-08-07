@@ -31,26 +31,26 @@ from PySide6.QtWidgets import (
     QGraphicsView,
 )
 
-from pm.media.availability import is_missing
-from pm.media.clip_pool import clip_pool
-from pm.media.image_cache import get_qimage
-from pm.model.commands import AddShapeCommand, EditSession
-from pm.model.project import Project
-from pm.model.snapping import (
+from media.availability import is_missing
+from media.clip_pool import clip_pool
+from media.image_cache import get_qimage
+from model.commands import AddShapeCommand, EditSession
+from model.project import Project
+from model.snapping import (
     closest_point_on_segment,
     find_snap,
     shape_edges,
     shape_vertices,
     snap_to_grid,
 )
-from pm.model.shapes import (
+from model.shapes import (
     DEFAULT_CIRCLE_NAME, DEFAULT_MESH_NAME, DEFAULT_POLYGON_NAME,
     CircleShape, EdgeVisibility, MeshShape, PolygonShape, Shape,
     active_masks, circle_from_center, mask_from_rect, mesh_from_rect,
     polygon_from_points,
 )
-from pm.render.fit import content_rect
-from pm.render.mesh import (
+from render.fit import content_rect
+from render.mesh import (
     bezier_control_points,
     bezier_local_control,
     cubic_point,
@@ -58,7 +58,7 @@ from pm.render.mesh import (
     mesh_outline,
     tessellate_mesh,
 )
-from pm.render.homography import corner_uv_assignment
+from render.homography import corner_uv_assignment
 
 
 class CanvasScene(QGraphicsScene):

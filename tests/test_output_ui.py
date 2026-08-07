@@ -6,13 +6,13 @@
 import pytest
 from PySide6.QtGui import QUndoStack
 
-from pm.model.output import Output, split_outputs
-from pm.model.project import Project
+from model.output import Output, split_outputs
+from model.project import Project
 
 
 @pytest.fixture
 def dialog(qapp):
-    from pm.ui.output_panel import OutputDialog
+    from ui.output_panel import OutputDialog
 
     project = Project()
     project.outputs = [Output(name="Projector 1")]
@@ -22,7 +22,7 @@ def dialog(qapp):
 
 @pytest.fixture
 def window(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     yield win
@@ -144,7 +144,7 @@ def test_the_toolbar_reports_how_many_outputs_are_live(window):
 
 
 def test_projecting_opens_one_window_per_enabled_output(window):
-    from pm.model.project_store import available_screens
+    from model.project_store import available_screens
 
     screens = available_screens()
     if not screens:
@@ -162,7 +162,7 @@ def test_projecting_opens_one_window_per_enabled_output(window):
 
 
 def test_a_disabled_output_gets_no_window(window):
-    from pm.model.project_store import available_screens
+    from model.project_store import available_screens
 
     screens = available_screens()
     if not screens:
@@ -191,7 +191,7 @@ def test_an_output_with_no_screen_gets_no_window(window):
 
 
 def test_disabling_an_output_closes_its_window(window):
-    from pm.model.project_store import available_screens
+    from model.project_store import available_screens
 
     screens = available_screens()
     if not screens:
