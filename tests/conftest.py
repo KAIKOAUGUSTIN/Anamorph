@@ -41,3 +41,40 @@ def qapp():
 
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+@pytest.fixture(autouse=True)
+def _drain_deleted_widgets():
+    """Let `deleteLater` actually delete.
+
+    Qt defers those deletions to the event loop, and a test that never runs
+    one leaves the widget - and, for a renderer, its GL context - alive until
+    the interpreter exits. Hundreds of them piled up over a run and the
+    process segfaulted on the way out, after every test had passed.
+    """
+    yield
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is not None:
+        app.processEvents()
+        app.sendPostedEvents(None, 0)
+        app.processEvents()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _close_widgets_before_the_app_goes():
+    """Tear widgets down while there is still a QApplication to do it under."""
+    yield
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return
+    for widget in list(app.topLevelWidgets()):
+        widget.close()
+        widget.setParent(None)
+        widget.deleteLater()
+    app.processEvents()
+    app.sendPostedEvents(None, 0)
+    app.processEvents()
