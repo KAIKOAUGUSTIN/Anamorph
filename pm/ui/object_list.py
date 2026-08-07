@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pm.media.availability import is_missing
 from pm.model.shapes import Shape
 
 
@@ -66,6 +67,12 @@ class ObjectList(QWidget):
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if shape.visible else Qt.Unchecked)
             label = shape.name
+            # A file that is not there is the difference between "I mapped it
+            # wrong" and "the drive is not plugged in", and in a dark room
+            # that is not a difference you can work out from a blank surface.
+            if is_missing(getattr(shape, "media", None)):
+                label = f"{label}  ⚠"
+                item.setToolTip(f"Media not found: {shape.media.path}")
             group_id = getattr(shape, "group_id", None)
             if group_id:
                 label = f"{label}  ⛓{group_numbers[group_id]}"

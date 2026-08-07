@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QGraphicsView,
 )
 
+from pm.media.availability import is_missing
 from pm.media.clip_pool import clip_pool
 from pm.media.image_cache import get_qimage
 from pm.model.commands import AddShapeCommand, EditSession
@@ -115,6 +116,19 @@ class CanvasScene(QGraphicsScene):
         super().drawForeground(painter, rect)
         scale = painter.worldTransform().m11() or 1.0
 
+        # Blackout kills the projectors, not the editor - you go on working
+        # while the wall is dark. Which means the editor has to say so loudly,
+        # or the next twenty minutes are spent wondering why nothing is
+        # showing up outside.
+        if self.project.blackout:
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            canvas_rect = QRectF(0, 0, self.project.canvas.width, self.project.canvas.height)
+            painter.setBrush(QColor(200, 40, 50, 28))
+            painter.setPen(QPen(QColor(220, 60, 70, 220), 3.0 / scale))
+            painter.drawRect(canvas_rect)
+            painter.restore()
+
         # The box itself, so the grips read as corners of something rather
         # than as four unexplained dots floating near the shape.
         if self.transform_box is not None:
@@ -167,6 +181,22 @@ def media_frame(media, transport=None) -> Optional[QImage]:
     # it for the length of this paint. `.copy()` here would be a full-frame
     # memcpy per surface per repaint.
     return QImage(frame.data, size[0], size[1], frame.strides[0], QImage.Format_RGB888)
+
+
+def paint_missing_marker(painter: QPainter, path: QPainterPath) -> None:
+    """Hatch a surface whose media is not on disk.
+
+    Drawn instead of the flat fill colour, because a surface that falls back
+    to its fill looks exactly like a surface nobody has assigned media to yet.
+    """
+    painter.save()
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    # A base tint under a bright hatch. The hatch alone was nearly invisible
+    # against the dark workspace, which defeats the point: this has to read
+    # across a room, at a glance, in the dark.
+    painter.fillPath(path, QBrush(QColor(60, 18, 22)))
+    painter.fillPath(path, QBrush(QColor(215, 70, 80, 170), Qt.BDiagPattern))
+    painter.restore()
 
 
 def _paint_media(painter: QPainter, shape: Shape, path: QPainterPath, transport=None) -> bool:
@@ -650,7 +680,10 @@ class PolygonItem(QGraphicsPathItem):
         painter.setRenderHint(QPainter.Antialiasing, True)
         apply_blend_mode(painter, self.model)
         if not _paint_media(painter, self.model, self.path(), self.transport):
-            painter.fillPath(self.path(), QBrush(QColor(*self.model.fill_color)))
+            if is_missing(self.model.media):
+                paint_missing_marker(painter, self.path())
+            else:
+                painter.fillPath(self.path(), QBrush(QColor(*self.model.fill_color)))
         clear_blend_mode(painter)
 
         if self.model.stroke_width > 0:
@@ -736,7 +769,10 @@ class MeshItem(QGraphicsPathItem):
         painter.setRenderHint(QPainter.Antialiasing, True)
         apply_blend_mode(painter, self.model)
         if not _paint_mesh_media(painter, self.model, self.transport):
-            painter.fillPath(self.path(), QBrush(QColor(*self.model.fill_color)))
+            if is_missing(self.model.media):
+                paint_missing_marker(painter, self.path())
+            else:
+                painter.fillPath(self.path(), QBrush(QColor(*self.model.fill_color)))
         clear_blend_mode(painter)
 
         if self.model.stroke_width > 0:
@@ -807,6 +843,9 @@ class CircleItem(QGraphicsEllipseItem):
         ellipse = add_mask_subpaths(ellipse, self.model)
         apply_blend_mode(painter, self.model)
         if _paint_media(painter, self.model, ellipse, self.transport):
+            painter.setBrush(Qt.NoBrush)
+        elif is_missing(self.model.media):
+            paint_missing_marker(painter, ellipse)
             painter.setBrush(Qt.NoBrush)
         else:
             painter.fillPath(ellipse, QBrush(QColor(*self.model.fill_color)))
