@@ -39,6 +39,7 @@ from pm.model.snapping import (
     snap_to_grid,
 )
 from pm.model.shapes import (
+    DEFAULT_CIRCLE_NAME, DEFAULT_MESH_NAME, DEFAULT_POLYGON_NAME,
     CircleShape, EdgeVisibility, MeshShape, PolygonShape, Shape,
     active_masks, circle_from_center, mask_from_rect, mesh_from_rect,
     polygon_from_points,
@@ -1689,11 +1690,11 @@ class CanvasEditor(QGraphicsView):
         if event.button() == Qt.LeftButton and self.tool in ("polygon", "circle", "mesh"):
             scene_pos = self._snap_point(self.mapToScene(event.position().toPoint()))
             if self.tool == "polygon":
-                shape = self._create_default_polygon(scene_pos, 120.0, "Polígono")
+                shape = self._create_default_polygon(scene_pos, 120.0, DEFAULT_POLYGON_NAME)
             elif self.tool == "mesh":
-                shape = mesh_from_rect((scene_pos.x(), scene_pos.y()), 200.0, name="Malha")
+                shape = mesh_from_rect((scene_pos.x(), scene_pos.y()), 200.0, name=DEFAULT_MESH_NAME)
             else:
-                shape = circle_from_center((scene_pos.x(), scene_pos.y()), 60.0, name="Círculo")
+                shape = circle_from_center((scene_pos.x(), scene_pos.y()), 60.0, name=DEFAULT_CIRCLE_NAME)
             if self.undo_stack is not None:
                 label = {"polygon": "Add Polygon", "mesh": "Add Mesh"}.get(self.tool, "Add Circle")
                 self.undo_stack.push(AddShapeCommand(self.project, shape, label))
