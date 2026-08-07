@@ -21,6 +21,13 @@ QMainWindow {
     color: #e8e8e8;
 }
 
+/* Dialogs were never styled, so every one of them - outputs, help - opened
+   as a light-grey panel with dark-theme widgets sitting on it. */
+QDialog {
+    background-color: #0f0f11;
+    color: #e8e8e8;
+}
+
 /* ============================================
    TYPE HIERARCHY
    ============================================ */

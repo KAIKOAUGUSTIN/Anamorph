@@ -11,9 +11,21 @@ from pm.model.shapes import Shape, shape_from_dict, shape_to_dict
 
 @dataclass
 class CanvasSettings:
-    width: int = 1280
-    height: int = 720
+    # The canvas is the artwork's own resolution, and everything - the test
+    # pattern included - is composited at it before the output pass resamples
+    # it onto each projector. Leaving it below the projector's native size
+    # throws away detail nothing downstream can put back, so a fresh project
+    # adopts the resolution of the first screen an output is aimed at.
+    DEFAULT_WIDTH = 1280
+    DEFAULT_HEIGHT = 720
+
+    width: int = DEFAULT_WIDTH
+    height: int = DEFAULT_HEIGHT
     background_color: List[int] = field(default_factory=lambda: [0, 0, 0, 255])
+
+    def is_default(self) -> bool:
+        """Still the size nobody chose - safe to adopt a screen's resolution."""
+        return (self.width, self.height) == (self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
 
     def to_dict(self) -> Dict[str, Any]:
         return {

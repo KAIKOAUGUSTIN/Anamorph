@@ -37,7 +37,7 @@ from pm.ui.output_panel import OutputDialog
 from pm.ui.object_list import ObjectList
 from pm.ui.property_panel import PropertyPanel
 from pm.ui.projection_window import ProjectionWindow
-from pm.ui.widgets import ArrowSlider
+from pm.ui.widgets import ArrowSlider, NoScrollComboBox
 
 
 class MainWindow(QMainWindow):
@@ -199,6 +199,12 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.action_group)
         toolbar.addAction(self.action_ungroup)
 
+        self.action_help = QAction("Help", self)
+        self.action_help.setShortcut(QKeySequence("F1"))
+        self.action_help.setShortcutContext(Qt.ApplicationShortcut)
+        self.action_help.setToolTip("Every gesture and shortcut, on one sheet (F1)")
+        self.addAction(self.action_help)
+
         toolbar.addSeparator()
 
         self.action_snap = QAction("Snap", self)
@@ -235,12 +241,15 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.action_projection)
         toolbar.addAction(self.action_test_mode)
 
-        self.pattern_combo = QComboBox()
+        self.pattern_combo = NoScrollComboBox()
         self.pattern_combo.setFixedWidth(140)
         for value, label in PATTERNS:
             self.pattern_combo.addItem(label, value)
         self.pattern_combo.setEnabled(False)
         toolbar.addWidget(self.pattern_combo)
+
+        toolbar.addSeparator()
+        toolbar.addAction(self.action_help)
 
         # Spacer for zoom control
         spacer = QWidget()
@@ -350,8 +359,11 @@ class MainWindow(QMainWindow):
         self.action_mask.triggered.connect(lambda _checked=False: self._mask_selected())
         self.action_group.triggered.connect(lambda _checked=False: self._group_selected())
         self.action_ungroup.triggered.connect(lambda _checked=False: self._ungroup_selected())
+        self.action_help.triggered.connect(lambda _checked=False: self._show_help())
 
         self.canvas.selection_changed.connect(self._on_canvas_selection)
+        self.canvas.tool_changed.connect(self._on_canvas_tool_changed)
+        self.canvas.handle_mode_changed.connect(self._on_handle_mode_changed)
         self.canvas.zoom_changed.connect(self._on_canvas_zoom_changed)
         self.object_list.shape_selected.connect(self._on_list_selection)
         self.object_list.visibility_changed.connect(self._on_visibility_change)
@@ -515,6 +527,16 @@ class MainWindow(QMainWindow):
             return
         self.property_panel.set_shape(self.project.get_shape(item.model.id))
 
+    def _show_help(self) -> None:
+        """Non-modal: a reference you can leave open while you work."""
+        if getattr(self, "_help_dialog", None) is None:
+            from pm.ui.help_dialog import HelpDialog
+
+            self._help_dialog = HelpDialog(self)
+        self._help_dialog.show()
+        self._help_dialog.raise_()
+        self._help_dialog.activateWindow()
+
     def _group_selected(self) -> None:
         """Tie the selected surfaces together. Two is the minimum that means
         anything - a group of one is just a shape."""
@@ -570,6 +592,25 @@ class MainWindow(QMainWindow):
     def _on_property_changed(self) -> None:
         self.canvas._sync_items()
         self.project.touch()
+
+    def _on_canvas_tool_changed(self, tool: str) -> None:
+        """Follow the canvas back to Select after it places a shape."""
+        action = {
+            "select": self.action_select,
+            "polygon": self.action_polygon,
+            "circle": self.action_circle,
+            "mesh": self.action_mesh,
+        }.get(tool)
+        if action is not None and not action.isChecked():
+            action.setChecked(True)
+
+    def _on_handle_mode_changed(self, point_mode: bool) -> None:
+        self.statusBar().showMessage(
+            "Points: drag the corners, curve and mask controls"
+            if point_mode
+            else "Transform: drag the box grips to scale, the top grip to rotate",
+            4000,
+        )
 
     def _set_tool(self, tool: str) -> None:
         self.canvas.set_tool(tool)

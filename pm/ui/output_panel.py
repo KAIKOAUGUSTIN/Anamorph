@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -37,8 +38,8 @@ from pm.model.commands import (
 from pm.model.media import SourceRect
 from pm.model.output import Output, split_outputs
 from pm.model.project import Project
-from pm.model.project_store import available_screens
-from pm.ui.widgets import ArrowSpinBox
+from pm.model.project_store import available_screens, screen_geometry
+from pm.ui.widgets import ArrowSpinBox, NoScrollComboBox, NoScrollSpinBox
 
 
 def _spin(minimum: float, maximum: float, step: float, decimals: int = 3) -> ArrowSpinBox:
@@ -73,29 +74,48 @@ class OutputDialog(QDialog):
         self.list.currentRowChanged.connect(lambda _row: self._load_selected())
         left.addWidget(self.list, 1)
 
+        # One button per row-half, each wide enough for its own label. They
+        # used to be squeezed against the dialog's bottom edge under a list
+        # that took every spare pixel, with the Close box landing on top.
         buttons = QHBoxLayout()
-        add_btn = QPushButton("Add")
-        remove_btn = QPushButton("Remove")
-        add_btn.clicked.connect(self._on_add)
-        remove_btn.clicked.connect(self._on_remove)
-        buttons.addWidget(add_btn)
-        buttons.addWidget(remove_btn)
+        buttons.setSpacing(6)
+        self.add_btn = QPushButton("Add")
+        self.remove_btn = QPushButton("Remove")
+        for btn in (self.add_btn, self.remove_btn):
+            btn.setMinimumHeight(28)
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.add_btn.setToolTip("Add another projector")
+        self.remove_btn.setToolTip("Remove the selected projector")
+        self.add_btn.clicked.connect(self._on_add)
+        self.remove_btn.clicked.connect(self._on_remove)
+        buttons.addWidget(self.add_btn)
+        buttons.addWidget(self.remove_btn)
         left.addLayout(buttons)
 
         tile_row = QHBoxLayout()
-        self.tile_count = QSpinBox()
+        tile_row.setSpacing(6)
+        self.tile_count = NoScrollSpinBox()
         self.tile_count.setRange(2, 8)
         self.tile_count.setValue(2)
-        tile_btn = QPushButton("Tile")
-        tile_btn.setToolTip(
+        self.tile_count.setFixedWidth(60)
+        self.tile_btn = QPushButton("Tile")
+        self.tile_btn.setMinimumHeight(28)
+        self.tile_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.tile_btn.setToolTip(
             "Replace the outputs with N projectors side by side, already\n"
             "overlapping and already carrying matching blend ramps."
         )
-        tile_btn.clicked.connect(self._on_tile)
+        self.tile_btn.clicked.connect(self._on_tile)
         tile_row.addWidget(self.tile_count)
-        tile_row.addWidget(tile_btn)
+        tile_row.addWidget(self.tile_btn)
         left.addLayout(tile_row)
-        layout.addLayout(left)
+        left.addWidget(self._build_canvas_group())
+        left.addSpacing(8)
+
+        left_panel = QWidget()
+        left_panel.setLayout(left)
+        left_panel.setFixedWidth(210)
+        layout.addWidget(left_panel)
 
         # --- the selected projector's settings ---------------------------
         scroll = QScrollArea()
@@ -121,6 +141,75 @@ class OutputDialog(QDialog):
 
         self.refresh()
 
+    def _build_canvas_group(self) -> QGroupBox:
+        """The artwork's own resolution.
+
+        It lives here because this is the dialog where you find out what the
+        projector actually is. A canvas smaller than the screen is upscaled on
+        the way out and the show is soft for a reason nothing on screen
+        explains.
+        """
+        group = QGroupBox("Canvas")
+        form = QFormLayout(group)
+        self.canvas_width = NoScrollSpinBox()
+        self.canvas_height = NoScrollSpinBox()
+        for box in (self.canvas_width, self.canvas_height):
+            box.setRange(64, 16384)
+            box.setSingleStep(2)
+            box.setFixedWidth(84)
+            box.valueChanged.connect(lambda _v: self._on_canvas_size_changed())
+        form.addRow("Width", self.canvas_width)
+        form.addRow("Height", self.canvas_height)
+
+        self.match_btn = QPushButton("Match to screen")
+        self.match_btn.setMinimumHeight(26)
+        self.match_btn.setToolTip("Set the canvas to the selected projector's native resolution")
+        self.match_btn.clicked.connect(self._on_match_canvas)
+        form.addRow(self.match_btn)
+        return group
+
+    def _adopt_screen_resolution(self, output) -> None:
+        """A fresh project takes its canvas from the first screen it is aimed at.
+
+        The default 1280x720 is a placeholder nobody chose; leaving it while
+        the projector reports 1920x1080 means the whole show - test pattern
+        included - is composited small and upscaled on the way out. A canvas
+        the operator has already set is never touched.
+        """
+        canvas = self._project.canvas
+        if not canvas.is_default():
+            return
+        geometry = screen_geometry(output.screen_id)
+        if geometry is None or geometry.width() < 64 or geometry.height() < 64:
+            return
+        canvas.width, canvas.height = geometry.width(), geometry.height()
+        self._updating = True
+        self.canvas_width.setValue(canvas.width)
+        self.canvas_height.setValue(canvas.height)
+        self._updating = False
+
+    def _on_canvas_size_changed(self) -> None:
+        if self._updating:
+            return
+        canvas = self._project.canvas
+        width, height = int(self.canvas_width.value()), int(self.canvas_height.value())
+        if (canvas.width, canvas.height) == (width, height):
+            return
+        canvas.width, canvas.height = width, height
+        self._project.touch()
+        self.outputs_changed.emit()
+
+    def _on_match_canvas(self) -> None:
+        output = self.current_output()
+        geometry = screen_geometry(output.screen_id) if output else None
+        if geometry is None:
+            return
+        self._updating = True
+        self.canvas_width.setValue(geometry.width())
+        self.canvas_height.setValue(geometry.height())
+        self._updating = False
+        self._on_canvas_size_changed()
+
     # --- construction ----------------------------------------------------
 
     def _build_identity_group(self) -> QGroupBox:
@@ -131,7 +220,7 @@ class OutputDialog(QDialog):
         self.name_edit.editingFinished.connect(lambda: self._commit("Rename Output"))
         form.addRow("Name", self.name_edit)
 
-        self.screen_combo = QComboBox()
+        self.screen_combo = NoScrollComboBox()
         self.screen_combo.currentIndexChanged.connect(lambda _i: self._commit("Output Screen"))
         form.addRow("Screen", self.screen_combo)
 
@@ -148,7 +237,7 @@ class OutputDialog(QDialog):
             "projectors overlap here, and the blend below hides the seam."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #808080; font-size: 11px;")
+        hint.setStyleSheet("color: #b8b8b8; font-size: 11px;")
         outer.addWidget(hint)
 
         row = QHBoxLayout()
@@ -171,7 +260,7 @@ class OutputDialog(QDialog):
             "against the surface. This sits above the per-surface corner pin."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #808080; font-size: 11px;")
+        hint.setStyleSheet("color: #b8b8b8; font-size: 11px;")
         outer.addWidget(hint)
 
         self.corner_spins: List[List[ArrowSpinBox]] = []
@@ -204,7 +293,7 @@ class OutputDialog(QDialog):
             "stops showing as a bright or dark band."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #808080; font-size: 11px;")
+        hint.setStyleSheet("color: #b8b8b8; font-size: 11px;")
         outer.addWidget(hint)
 
         row = QHBoxLayout()
@@ -232,7 +321,7 @@ class OutputDialog(QDialog):
         outer = QVBoxLayout(group)
         hint = QLabel("Two projectors never match out of the box; pull them into line here.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #808080; font-size: 11px;")
+        hint.setStyleSheet("color: #b8b8b8; font-size: 11px;")
         outer.addWidget(hint)
 
         form = QFormLayout()
@@ -288,6 +377,9 @@ class OutputDialog(QDialog):
 
         self._updating = True
         try:
+            canvas = self._project.canvas
+            self.canvas_width.setValue(canvas.width)
+            self.canvas_height.setValue(canvas.height)
             self.name_edit.setText(output.name)
             self.enabled_check.setChecked(output.enabled)
 
@@ -336,6 +428,7 @@ class OutputDialog(QDialog):
 
         output.name = self.name_edit.text() or output.name
         output.screen_id = self.screen_combo.currentData()
+        self._adopt_screen_resolution(output)
         output.enabled = self.enabled_check.isChecked()
         output.region = SourceRect(*(box.value() for box in self.region_spins)).normalised()
         output.corners = [(pair[0].value(), pair[1].value()) for pair in self.corner_spins]
