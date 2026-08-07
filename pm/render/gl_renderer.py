@@ -18,7 +18,8 @@ from OpenGL.GL import (
     GL_TEXTURE0, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_FILTER,
     GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TRIANGLES, GL_TRUE,
     GL_UNSIGNED_BYTE, GL_UNSIGNED_INT,
-    GL_VERTEX_SHADER, GL_ONE_MINUS_SRC_ALPHA,
+    GL_VERTEX_SHADER, GL_ONE, GL_ONE_MINUS_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA,
+    GL_DST_COLOR,
     glActiveTexture, glAttachShader, glBindBuffer, glBindTexture,
     glBindVertexArray, glBlendFunc, glBufferData, glClear, glClearColor,
     glCompileShader, glCreateProgram, glCreateShader, glDeleteBuffers,
@@ -38,7 +39,7 @@ from PySide6.QtOpenGL import QOpenGLFramebufferObject, QOpenGLFramebufferObjectF
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QWidget
 
-from pm.media.video_player import VideoPlayer
+from pm.media.clip_pool import clip_key, clip_pool
 from pm.model.media import MediaRef
 from pm.model.project import Project
 from pm.model.shapes import CircleShape, MeshShape, PolygonShape, Shape, active_masks
@@ -100,8 +101,9 @@ class GLRenderer(QOpenGLWidget):
         # Texture cache. Sizes are cached alongside the texture so a frame
         # never has to touch the source file again.
         self._image_cache: Dict[str, Tuple[int, Tuple[int, int]]] = {}
-        self._video_players: Dict[str, VideoPlayer] = {}
-        self._video_textures: Dict[str, Tuple[int, Tuple[int, int]]] = {}
+        # Decoders live in the shared pool, not here: one clip is decoded
+        # once no matter how many windows are looking at it.
+        self._video_textures: Dict[Tuple, Tuple[int, Tuple[int, int]]] = {}
         self._test_pattern_texture_id: Optional[int] = None
         self._test_pattern_key: Optional[Tuple] = None
 
@@ -116,9 +118,6 @@ class GLRenderer(QOpenGLWidget):
         # Stop the repaint timer first: it fires every 16ms, and a paint after
         # the programs are deleted uses handles that no longer exist.
         self._timer.stop()
-        for player in self._video_players.values():
-            player.stop()
-        self._video_players.clear()
 
         # _video_textures is cleared by _cleanup_textures, after the GL
         # objects it names have actually been deleted.
@@ -476,6 +475,26 @@ class GLRenderer(QOpenGLWidget):
             return None
         return canvas_to_uv_matrix(shape.points)
 
+    # How each blend mode maps onto fixed-function blending. The field has
+    # been on the model - and in the file format - since the beginning; the
+    # renderer simply never read it, so every surface composited as "normal".
+    #
+    # Add and screen are how projected light actually behaves: two beams on the
+    # same wall sum, they do not replace one another. Multiply is how a gobo or
+    # a gel behaves. Getting these means a surface can tint or brighten what is
+    # under it instead of only covering it.
+    BLEND_MODES = {
+        "normal": (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA),
+        "add": (GL_SRC_ALPHA, GL_ONE),
+        "screen": (GL_ONE_MINUS_DST_COLOR, GL_ONE),
+        "multiply": (GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA),
+    }
+
+    def _apply_blend_mode(self, shape: Shape) -> None:
+        mode = (getattr(shape, "blend_mode", "normal") or "normal").lower()
+        source, destination = self.BLEND_MODES.get(mode, self.BLEND_MODES["normal"])
+        glBlendFunc(source, destination)
+
     def _draw_textured_shape(
         self,
         points: List[Tuple[float, float]],
@@ -572,8 +591,10 @@ class GLRenderer(QOpenGLWidget):
         glUniform1i(loc, 0)
 
         # Draw
+        self._apply_blend_mode(shape)
         glBindVertexArray(self._vao)
         glDrawElements(GL_TRIANGLES, len(indices), GL_UNSIGNED_INT, None)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
     def _draw_solid_shape(
         self,
@@ -620,8 +641,10 @@ class GLRenderer(QOpenGLWidget):
         else:
             glUniform3f(loc, 0.0, 0.0, 0.0)
 
+        self._apply_blend_mode(shape)
         glBindVertexArray(self._vao)
         glDrawElements(GL_TRIANGLES, len(indices), GL_UNSIGNED_INT, None)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
     def _render_strokes(self, canvas_w: float, canvas_h: float) -> None:
         """Render shape strokes."""
@@ -877,13 +900,13 @@ class GLRenderer(QOpenGLWidget):
         return None, (0, 0)
 
     def _get_video_texture(self, media: MediaRef) -> Tuple[Optional[int], Tuple[int, int]]:
-        player = self._video_players.get(media.path)
-        if not player:
-            player = VideoPlayer(media.path)
-            player.start()
-            self._video_players[media.path] = player
+        """The frame this clip should be showing, uploaded as a texture.
 
-        frame, size = player.get_frame()
+        The decoder comes from the shared pool and the time from the project's
+        transport, so two surfaces on the same file agree with each other and
+        with every other window looking at them.
+        """
+        frame, size = clip_pool().frame(media, self.project.transport.position())
         if frame is None:
             return None, (0, 0)
         qimg = QImage(frame.data, frame.shape[1], frame.shape[0], frame.strides[0], QImage.Format_RGB888).copy()
@@ -893,7 +916,8 @@ class GLRenderer(QOpenGLWidget):
         # every frame - and never deleting it - exhausts GPU memory within
         # minutes of playback.
         frame_size = (qimg.width(), qimg.height())
-        cached = self._video_textures.get(media.path)
+        texture_key = clip_key(media) or (media.path,)
+        cached = self._video_textures.get(texture_key)
         if cached and cached[1] == frame_size:
             tex_id = cached[0]
             ptr = self._image_bytes(qimg)
@@ -910,7 +934,7 @@ class GLRenderer(QOpenGLWidget):
         tex_id = self._create_texture_from_qimage(qimg)
         if not tex_id:
             return None, (0, 0)
-        self._video_textures[media.path] = (tex_id, frame_size)
+        self._video_textures[texture_key] = (tex_id, frame_size)
         return tex_id, size
 
     @staticmethod

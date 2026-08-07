@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtCore import QObject, Signal
 
 from pm.model.output import Output
+from pm.model.transport import Transport
 from pm.model.shapes import Shape, shape_from_dict, shape_to_dict
 
 
@@ -56,6 +57,10 @@ class Project(QObject):
         # canvas, which is what lets two of them overlap and blend.
         self.outputs: List[Output] = []
         self.media_library: List[str] = []
+        # The show clock. Every clip reads its position from here, which is
+        # what makes two surfaces on the same file frame-accurate and what
+        # lets one button stop the whole show.
+        self.transport = Transport()
         self.ui_state: Dict[str, Any] = {"last_projection_screen_id": None, "test_mode": False}
         self.path: Optional[str] = None
         self.name: str = "Untitled"
@@ -106,6 +111,7 @@ class Project(QObject):
             "shapes": [shape_to_dict(s) for s in self.shapes],
             "outputs": [o.to_dict() for o in self.outputs],
             "media_library": list(self.media_library),
+            "transport": self.transport.to_dict(),
             "ui": dict(self.ui_state),
         }
 
@@ -119,6 +125,7 @@ class Project(QObject):
         # exactly one projector, described by the screen id in ui_state.
         project.outputs = [Output.from_dict(o) for o in data.get("outputs", [])]
         project.media_library = list(data.get("media_library", []))
+        project.transport = Transport.from_dict(data.get("transport", {}))
         project.ui_state = dict(data.get("ui", {"last_projection_screen_id": None, "test_mode": False}))
         if not project.outputs:
             project.outputs = [
