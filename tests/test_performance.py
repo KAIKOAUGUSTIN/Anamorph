@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """What the renderer costs per frame, and that it stops paying it twice.
 
 The renderer repaints on a 16ms timer whether anything moved or not. Rebuilding

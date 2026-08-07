@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Grouping: surfaces that move as one.
 
 A window frame is four panels; a colonnade is a dozen identical columns.

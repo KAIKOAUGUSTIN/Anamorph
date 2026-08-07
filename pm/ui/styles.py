@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """
 Studio Dark Luxury Theme for Projection Mapper
 A refined, professional dark interface with cyan accents

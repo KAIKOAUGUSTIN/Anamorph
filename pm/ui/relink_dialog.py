@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Point a project at media that has moved.
 
 Relative paths already handle the case where the whole show folder travels as

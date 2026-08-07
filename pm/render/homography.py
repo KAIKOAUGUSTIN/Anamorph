@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Perspective (projective) mapping of media onto four-corner surfaces.
 
 A projector is almost never perpendicular to the surface it lights, so the

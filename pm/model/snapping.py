@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Magnetic snapping for vertex dragging.
 
 Two surfaces meeting at a corner have to share the seam exactly. A gap of one

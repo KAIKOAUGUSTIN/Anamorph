@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Problems the operator can actually see.
 
 Every failure that is not fatal used to end at `logger.warning` - a codec the

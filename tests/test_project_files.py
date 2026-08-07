@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Projects that survive being moved, and work that survives a crash.
 
 Two failures that only show up when it is too late: a show folder copied to

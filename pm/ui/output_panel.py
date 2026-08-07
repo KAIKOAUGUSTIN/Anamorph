@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Calibration for each projector: region, keystone, blend and colour.
 
 A dialog rather than a fourth panel. Calibration is bench work done once when

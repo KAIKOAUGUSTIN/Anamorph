@@ -27,6 +27,7 @@ python projection_gui.py
 
 - `projection_gui.py` - Thin CLI entry point, delegates to `pm.app_main.run()`
 - `pm/app_main.py` - Application initialization: QApplication setup, high DPI config, theme application
+- `pm/about.py` - Name, version, copyright and licence in one place, with no Qt import - read by the About box, and by packaging later
 
 - `pm/model/` - Data models (dataclasses, no Qt dependency)
   - `project.py` - Project root with CanvasSettings, shape list, media library; emits `changed` signal via QObject inheritance
@@ -47,6 +48,7 @@ python projection_gui.py
   - `object_list.py` - Layer list with visibility, lock and group markers, and Solo
   - `source_region.py` - Draggable rectangle over the media thumbnail, for picking the input region
   - `output_panel.py` - `OutputDialog`: per-projector region, keystone, blend, colour and the canvas resolution
+  - `about_dialog.py` - The About box: the notices GPL-3 asks an interactive program to display
   - `help_dialog.py` - The shortcut sheet, non-modal so it can stay open. `tests/test_problems.py` checks every key it names is actually bound - a manual that lies is worse than none
   - `problem_log.py` - A logging handler that puts warnings and errors where the operator can see them
   - `transport_bar.py` - Play/pause, restart and rate, in the toolbar
@@ -295,6 +297,42 @@ New surfaces are called `Polygon`, `Circle`, `Mesh` (`DEFAULT_*_NAME` in
 which reads as a bug rather than a choice. Existing projects are unaffected -
 a shape's name travels with the shape.
 
+### Licensing
+
+**GPL-3.0-or-later**, and the repository is built so it stays that way without
+anyone having to remember.
+
+`pm/about.py` is the single source: name, version, copyright, the SPDX
+identifier and the four facts GPL-3 section 0 calls "Appropriate Legal
+Notices". The About box, the README and any future installer read from there
+rather than each carrying their own copy to drift out of sync. It has no Qt
+import, so packaging and a future CLI can use it too.
+
+Every `.py` carries a four-line SPDX header. That is not decoration: a file
+copied out of this repository on its own used to arrive with no terms at all,
+and the LICENSE file does not travel into a frozen binary either - which is
+why the About box exists at all.
+
+`tests/test_licensing.py` is what makes it durable. It parametrises over
+`git ls-files '*.py'`, so a new file without a header fails immediately, and
+it fails if a dependency is added to `requirements.txt` without an entry in
+`THIRD-PARTY-NOTICES.md` - the omission that is invisible until the day
+someone ships a build. Both were verified to fail when their subject is
+removed.
+
+Contributions come in under the **DCO**, not a CLA (`CONTRIBUTING.md` quotes
+version 1.1 in full). That is a deliberate one-way door: contributors keep
+their copyright, so nobody - including the owner - can relicense the project
+without asking all of them. It is the mechanism that makes "this will stay
+free" structural rather than a promise.
+
+`app_main` sets `setApplicationDisplayName`/`setApplicationVersion` and
+deliberately **not** `setApplicationName`/`setOrganizationName`:
+`QStandardPaths` derives `AppDataLocation` from those two, so setting them
+would move the session file out from under anyone holding unsaved work. The
+crash net would come up empty exactly once, silently, on the release that
+"just named the app properly".
+
 ### File Format
 
 Projects saved as JSON with `.pmap.json` extension containing:
@@ -332,7 +370,7 @@ VideoPlayer uses daemon thread with lock-protected frame access. Main thread (GL
 - **Project** - Toggle fullscreen projection to selected screen
 - **Test Mode** + pattern dropdown - Replace the output with a calibration pattern
 - **Blackout** - Kill every projector at once, without stopping the show (`B`)
-- **Help** - Every gesture and shortcut on one sheet (`F1`)
+- **Help** - Every gesture and shortcut on one sheet (`F1`). The Help *menu* also has About, which is where the program states its licence
 - **Preview** - Watch one projector's frame - region, keystone, blend, colour - without projecting
 - **Outputs...** - Per-projector calibration: canvas region, keystone, edge blend, colour. `Tile` lays out N projectors pre-overlapped with matching ramps
 
@@ -393,6 +431,7 @@ pytest
 - `tests/test_playback.py` - the show clock, decoder sharing, loop/offset/rate, the transport bar
 - `tests/test_showtime.py` - blackout, missing-media detection, relinking, the undo gaps
 - `tests/test_problems.py` - the problem log, the real call sites reaching it, and that the help sheet's keys are bound
+- `tests/test_licensing.py` - the SPDX header on every tracked `.py`, a notice for every dependency, the DCO quoted in full, and the About box carrying the notices the GPL asks for
 - `tests/test_render_gl.py` - **pixels**: what actually lands on the projector
 
 `test_render_gl.py` needs a real GL context, which the `offscreen` platform

@@ -1,3 +1,8 @@
+# Anamorph - projection mapping
+# Copyright (C) 2026 Kaio Augusto
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Things you need at five minutes to doors.
 
 Blackout, knowing what the project cannot find, and being able to point it
