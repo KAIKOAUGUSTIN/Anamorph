@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QFileDialog,
+    QInputDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -59,6 +60,13 @@ class PropertyPanel(QWidget):
         ("Polygon", "polygon"),
         ("Circle", "circle"),
         ("Mesh", "mesh"),
+    )
+
+    BLEND_MODES = (
+        ("Normal", "normal"),
+        ("Add", "add"),
+        ("Screen", "screen"),
+        ("Multiply", "multiply"),
     )
 
     FIT_MODES = (
@@ -184,6 +192,23 @@ class PropertyPanel(QWidget):
         opacity_layout.addWidget(self.opacity_value)
         layout.addWidget(opacity_row)
 
+        # Blend mode. Projected light adds: two beams on the same wall sum
+        # rather than one replacing the other, which is what Add and Screen
+        # are for. The field has been in the file format since the beginning.
+        blend_row = QWidget()
+        blend_layout = QHBoxLayout(blend_row)
+        blend_layout.setContentsMargins(0, 0, 0, 0)
+        blend_layout.setSpacing(8)
+        blend_label = QLabel("Blend")
+        blend_label.setStyleSheet(PropertyPanel._LABEL_DIM_STYLE)
+        self.blend_mode = NoScrollComboBox()
+        for label, value in PropertyPanel.BLEND_MODES:
+            self.blend_mode.addItem(label, value)
+        self.blend_mode.currentIndexChanged.connect(self._on_blend_mode_changed)
+        blend_layout.addWidget(blend_label)
+        blend_layout.addWidget(self.blend_mode, 1)
+        layout.addWidget(blend_row)
+
         # The model has honoured `locked` in the canvas all along; there was
         # simply no way to switch it on.
         self.lock_check = QCheckBox("Lock shape")
@@ -299,8 +324,13 @@ class PropertyPanel(QWidget):
         self.load_image_btn.clicked.connect(lambda: self._pick_media("image"))
         self.load_video_btn.clicked.connect(lambda: self._pick_media("video"))
         self.clear_media_btn.clicked.connect(self._clear_media)
+        self.load_camera_btn = QPushButton("Camera")
+        self.load_camera_btn.setToolTip("Use a capture device as this surface's source")
+        self.load_camera_btn.clicked.connect(lambda: self._pick_media("camera"))
         media_buttons.addWidget(self.load_image_btn)
         media_buttons.addWidget(self.load_video_btn)
+        media_buttons.addWidget(self.load_camera_btn)
+        self._build_playback_group(media_layout)
         media_buttons.addWidget(self.clear_media_btn)
         media_layout.addLayout(media_buttons)
 
@@ -522,7 +552,8 @@ class PropertyPanel(QWidget):
             self.masks_group.setVisible(False)
             self.points_group.setVisible(False)
             self._update_media(None)
-            self.source_picker.set_media(None, None)
+            self._sync_playback(None)
+            self.source_picker.set_media(None, None, media=None)
             self._updating = False
             self.updateGeometry()
             return
@@ -536,11 +567,14 @@ class PropertyPanel(QWidget):
         self.opacity_slider.setValue(int(shape.opacity * 100))
         self.opacity_value.setText(f"{int(shape.opacity * 100)}%")
         self.lock_check.setChecked(bool(shape.locked))
+        blend_index = self.blend_mode.findData(shape.blend_mode or "normal")
+        self.blend_mode.setCurrentIndex(blend_index if blend_index >= 0 else 0)
         self._populate_edges(shape)
         self._populate_masks(shape)
         self._update_point_controls(shape)
         self._populate_coords(shape)
         self._update_media(shape.media)
+        self._sync_playback(shape.media)
         self._select_fit_mode(shape.media.fit_mode if shape.media else "stretch")
         self._update_corner_pin_controls()
         self._sync_source_region(shape)
@@ -764,12 +798,17 @@ class PropertyPanel(QWidget):
     def _sync_source_region(self, shape: Shape) -> None:
         media = shape.media
         region = media.source_rect.normalised()
-        self.source_picker.set_media(media.path if media.kind == "image" else "", region)
+        self.source_picker.set_media(
+            media.path if media.kind == "image" else "", region, media=media
+        )
+        self.source_picker._transport = self._project.transport if self._project else None
         for spin, value in zip(self.source_spins, (region.u0, region.v0, region.u1, region.v1)):
             spin.setValue(value)
-        # Only images can be previewed; video would need a second decoder.
-        self.source_picker.setVisible(media.kind == "image")
-        self.source_hint.setVisible(media.kind == "image")
+        # Video and camera feeds are previewable now that decoders are shared,
+        # so the region can be aimed by eye instead of typed blind.
+        previewable = media.kind in ("image", "video", "camera")
+        self.source_picker.setVisible(previewable)
+        self.source_hint.setVisible(previewable)
 
     def _apply_source_region(self, region: SourceRect, commit: bool) -> None:
         if self._updating or not self._shape:
@@ -825,6 +864,87 @@ class PropertyPanel(QWidget):
         self._shape.resize_grid(rows, cols)
         self._populate_coords(self._shape)
         self._commit("Mesh Density")
+
+    def _build_playback_group(self, parent_layout) -> None:
+        """How this surface's clip runs against the show clock.
+
+        Per surface rather than per file: the same video is a looping backdrop
+        on one wall and a one-shot sting on another. Two surfaces whose
+        settings match share a decoder and stay frame-accurate against each
+        other, which is how synchronisation is spelled here.
+        """
+        self.playback_group = QGroupBox("Playback")
+        form = QFormLayout(self.playback_group)
+
+        self.loop_check = QCheckBox("Loop")
+        self.loop_check.setToolTip("Restart the clip when it ends")
+        self.loop_check.toggled.connect(lambda _v: self._commit_playback("Loop"))
+        form.addRow("", self.loop_check)
+
+        self.hold_check = QCheckBox("Hold last frame")
+        self.hold_check.setToolTip(
+            "When a one-shot clip ends, keep its last frame up.\n"
+            "Going black mid-show is a failure the audience sees."
+        )
+        self.hold_check.toggled.connect(lambda _v: self._commit_playback("Hold Last Frame"))
+        form.addRow("", self.hold_check)
+
+        self.clip_speed = ArrowSpinBox()
+        self.clip_speed.setRange(0.05, 4.0)
+        self.clip_speed.setSingleStep(0.05)
+        self.clip_speed.setDecimals(2)
+        self.clip_speed.setFixedWidth(80)
+        self.clip_speed.setToolTip("This clip's rate, on top of the show's own speed")
+        self.clip_speed.valueChanged.connect(lambda _v: self._commit_playback("Clip Speed"))
+        form.addRow("Speed", self.clip_speed)
+
+        self.clip_start = ArrowSpinBox()
+        self.clip_start.setRange(-3600.0, 3600.0)
+        self.clip_start.setSingleStep(0.5)
+        self.clip_start.setDecimals(2)
+        self.clip_start.setFixedWidth(80)
+        self.clip_start.setToolTip(
+            "Where show time zero lands in this clip, in seconds.\n"
+            "Negative delays the clip; positive skips into it."
+        )
+        self.clip_start.valueChanged.connect(lambda _v: self._commit_playback("Clip Start"))
+        form.addRow("Offset", self.clip_start)
+
+        parent_layout.addWidget(self.playback_group)
+
+    def _commit_playback(self, label: str) -> None:
+        if self._updating or not self._shape or not self._shape.media:
+            return
+        playback = self._shape.media.playback
+        playback.loop = self.loop_check.isChecked()
+        playback.hold_last = self.hold_check.isChecked()
+        playback.speed = float(self.clip_speed.value())
+        playback.start = float(self.clip_start.value())
+        self._commit(label)
+
+    def _sync_playback(self, media) -> None:
+        # Only a clip has a timeline. A still or a live feed has nothing here
+        # to set, and showing the controls anyway invites the operator to set
+        # something that will be ignored.
+        timed = bool(media and media.is_timed)
+        self.playback_group.setVisible(timed)
+        if not timed:
+            return
+        playback = media.playback
+        self.loop_check.setChecked(playback.loop)
+        self.hold_check.setChecked(playback.hold_last)
+        self.hold_check.setEnabled(not playback.loop)
+        self.clip_speed.setValue(playback.speed)
+        self.clip_start.setValue(playback.start)
+
+    def _on_blend_mode_changed(self, _index: int) -> None:
+        if self._updating or not self._shape:
+            return
+        mode = self.blend_mode.currentData() or "normal"
+        if mode == self._shape.blend_mode:
+            return
+        self._shape.blend_mode = mode
+        self._commit("Blend Mode")
 
     def _on_lock_toggled(self, checked: bool) -> None:
         if self._updating or not self._shape:
@@ -1117,6 +1237,11 @@ class PropertyPanel(QWidget):
             return
         if kind == "image":
             path, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
+        elif kind == "camera":
+            # A device index, not a file. Cameras have no names OpenCV can be
+            # asked for portably, so the number is what there is.
+            index, accepted = QInputDialog.getInt(self, "Camera", "Device index", 0, 0, 15)
+            path = str(index) if accepted else ""
         else:
             path, _ = QFileDialog.getOpenFileName(self, "Select Video", "", "Videos (*.mp4 *.mov *.avi *.mkv)")
         if not path:

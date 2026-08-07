@@ -50,6 +50,11 @@ SHORTCUTS: List[Section] = [
         ("Ctrl + Shift + G", "Ungroup them"),
         ("Delete / Backspace", "Remove the selected surface"),
     ]),
+    ("Playback", [
+        ("Space", "Play or pause every clip in the show"),
+        ("Restart", "Send the show back to zero"),
+        ("Speed", "Rate for the whole show; each clip can scale it further"),
+    ]),
     ("Project", [
         ("Ctrl + Z", "Undo"),
         ("Ctrl + Shift + Z  or  Ctrl + Y", "Redo"),

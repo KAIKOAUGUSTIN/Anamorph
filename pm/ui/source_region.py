@@ -34,6 +34,8 @@ class SourceRegionPicker(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._path = ""
+        self._media = None
+        self._transport = None
         self._region = SourceRect()
         self._drag: Optional[str] = None
         self._grab_offset = QPointF()
@@ -41,11 +43,26 @@ class SourceRegionPicker(QWidget):
         self.setMouseTracking(True)
         self.setCursor(Qt.CrossCursor)
 
-    def set_media(self, path: Optional[str], region: Optional[SourceRect]) -> None:
-        """`None` clears the picker - there is no shape to show a region for."""
+    def set_media(self, path: Optional[str], region: Optional[SourceRect], media=None) -> None:
+        """`None` clears the picker - there is no shape to show a region for.
+
+        `media` lets the picker show a live frame instead of a still: now that
+        decoders are shared, previewing a clip here costs nothing extra, and
+        picking a region out of a video against a blank rectangle was
+        guesswork.
+        """
         self._path = path or ""
+        self._media = media
         self._region = (region or SourceRect()).normalised()
         self.update()
+
+    def source_image(self):
+        """The image behind the rectangle: a still, or the clip's current frame."""
+        if self._media is not None and getattr(self._media, "kind", None) in ("video", "camera"):
+            from pm.ui.canvas_editor import media_frame
+
+            return media_frame(self._media, self._transport)
+        return get_qimage(self._path)
 
     def region(self) -> SourceRect:
         return self._region
@@ -54,7 +71,7 @@ class SourceRegionPicker(QWidget):
 
     def _frame(self) -> QRectF:
         """Where the media is drawn, letterboxed into the widget."""
-        image = get_qimage(self._path)
+        image = self.source_image()
         area = QRectF(4, 4, max(self.width() - 8, 1), max(self.height() - 8, 1))
         if image is None or image.width() == 0 or image.height() == 0:
             return area
@@ -158,7 +175,7 @@ class SourceRegionPicker(QWidget):
         painter.fillRect(self.rect(), QColor(18, 18, 22))
 
         frame = self._frame()
-        image = get_qimage(self._path)
+        image = self.source_image()
         if image is None:
             painter.setPen(QPen(_DIM, 1))
             painter.drawText(self.rect(), Qt.AlignCenter, "No image preview")
