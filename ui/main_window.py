@@ -789,7 +789,9 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Select a grouped surface to ungroup", 3000)
             return
         self.undo_stack.push(
-            SetGroupCommand(self.project, {shape_id: None for shape_id in dict.fromkeys(ids)}, "Ungroup")
+            # `fromkeys` already maps every id to None, and already drops the
+            # duplicates a group's members arrive with.
+            SetGroupCommand(self.project, dict.fromkeys(ids), "Ungroup")
         )
 
     def _group_of(self, shape_id: str):
