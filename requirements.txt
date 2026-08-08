@@ -1,6 +1,13 @@
-PySide6>=6.11.1
+# Essentials, not the full PySide6. The app imports QtCore, QtGui, QtWidgets,
+# QtOpenGL and QtOpenGLWidgets - every one of them in this wheel. The Addons
+# wheel the meta-package would also pull is 438 MB of things this app never
+# touches, 195 MB of which is a whole Chromium inside QtWebEngineCore.
+PySide6-Essentials>=6.11.1
 numpy>=2.5.1
-opencv-python>=4.9
+# Headless: the app uses VideoCapture, VideoWriter and cvtColor and never
+# opens an OpenCV window, so the GUI build's GTK stack is dead weight in
+# the bundle - and one more toolkit whose licence would have to be tracked.
+opencv-python-headless>=4.9
 mapbox_earcut>=2.0.0
 Pillow>=12.3.0
 PyOpenGL>=3.1.10

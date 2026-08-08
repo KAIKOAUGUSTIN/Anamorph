@@ -352,6 +352,64 @@ their copyright, so nobody - including the owner - can relicense the project
 without asking all of them. It is the mechanism that makes "this will stay
 free" structural rather than a promise.
 
+### Packaging
+
+`packaging/anamorph.spec` builds a **one-directory** PyInstaller bundle, and
+that is a licence decision before it is a technical one. Qt is taken under
+LGPL-3, whose section 4 asks that whoever receives the binary can replace Qt
+with their own build. In a one-directory bundle the Qt libraries sit as
+ordinary files next to the executable; `--onefile` unpacks into a temporary
+directory that disappears, which makes the same swap impractical.
+
+**The swap was tested, not assumed, and the result has a caveat.** Replacing
+`libQt6Widgets.so.6` with a *modified build of the same version* works - the
+app starts normally, which is the LGPL-4 scenario ("a modified version of the
+Library that is interface-compatible with the Linked Version"). Replacing it
+with a *different* version does **not**: PySide6 checks the Qt it finds
+against the Qt it was compiled against and refuses the mismatch with
+`libshiboken: could not import module 'PySide6.QtCore'`. That is PySide6's own
+guard, not an ABI limitation - `dlopen` loads the library fine. A recipient
+exercising their LGPL rights has to rebuild Qt at the pinned version, which
+the licence contemplates; they cannot casually drop in a newer Qt.
+
+The negative control matters as much as the test: hiding the library makes the
+app fail, which is what proves it is loaded from that replaceable file rather
+than embedded.
+
+`licenses/LGPL-3.0.txt` is vendored because **PySide6's wheel does not ship
+it** - the obligation cannot be met by reaching into the dependency at build
+time. It travels into the bundle alongside `LICENSE` and
+`THIRD-PARTY-NOTICES.md`, since a repository does not travel inside a frozen
+binary. That is the same reason the About box exists.
+
+Two dependency trims, both verified by installing into a clean interpreter and
+running the whole suite:
+
+- `PySide6-Essentials` rather than the `PySide6` meta-package. The app imports
+  `QtCore`, `QtGui`, `QtWidgets`, `QtOpenGL` and `QtOpenGLWidgets`, every one
+  of them in Essentials. The Addons wheel is 438 MB the app never touches,
+  195 MB of it a whole Chromium inside `QtWebEngineCore`.
+- `opencv-python-headless`. The app calls `VideoCapture`, `VideoWriter` and
+  `cvtColor` and never opens an OpenCV window, so the GUI build's toolkit is
+  weight and one more licence to track.
+
+Together: 402 MB to 367 MB on Linux, from a starting point that would have
+been past 800 MB with the meta-package. A GTK stack is still in there, pulled
+now by Qt's own platform theme rather than by OpenCV; it is the next trim if
+one is wanted.
+
+`tests/test_packaging.py` guards the parts that are invisible from the source
+tree - that the spec still collects rather than freezes to one file, that the
+three legal documents are still listed, and that neither dependency trim has
+quietly regressed. `.github/workflows/release.yml` builds on a `v*` tag,
+**starts the bundle** before shipping it (a build that produces files is not a
+build that produces an app), checks the licence texts are inside, and attaches
+the archives to a draft release.
+
+Nothing is signed. Windows SmartScreen and macOS Gatekeeper will warn, and
+macOS notarisation needs a paid Apple Developer account - the one part of this
+that money, not code, unblocks.
+
 ### The session directory, and the app's name
 
 `app_main` sets `setApplicationName`/`setOrganizationName`, which is what
