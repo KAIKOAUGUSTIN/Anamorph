@@ -11,6 +11,9 @@ on:
   # and `dev` proposed into `main` alike.
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   # One job per operating system, not per test file. A failing test is named
   # by its annotation - file, test, line, message, on the diff itself - which
