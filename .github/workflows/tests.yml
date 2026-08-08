@@ -2,7 +2,13 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    # `dev` is where work integrates and `main` is what has been released, so
+    # both need covering: without `dev` here the integration branch runs
+    # unverified between one release and the next, which is exactly the window
+    # where a bad merge would sit unnoticed.
+    branches: [main, dev]
+  # No branch filter: this has to catch a feature branch proposed into `dev`
+  # and `dev` proposed into `main` alike.
   pull_request:
 
 jobs:
@@ -20,13 +26,12 @@ jobs:
       fail-fast: false
       matrix:
         os:
+          # All three, and the third one earned its place immediately: the
+          # first Windows run found a clock-resolution bug in `reap_idle` that
+          # Linux and macOS had agreed about - wrongly - for months.
           - ubuntu-latest
           - windows-latest
           - macos-latest
-          # Add `windows-latest` and `macos-latest` here to cover them. Both
-          # need a shakedown run first - the suite has never been executed on
-          # either, and path handling and the OpenCV video fixture are where
-          # it would show.
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
