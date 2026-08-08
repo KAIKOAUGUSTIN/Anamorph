@@ -1,0 +1,111 @@
+name: Release
+
+# Tags only. A build that runs on every push produces artifacts nobody asked
+# for and takes runner minutes from the test matrix, which is the job that
+# actually gates a merge.
+on:
+  push:
+    tags: ["v*"]
+  # Buildable on demand, so the packaging can be exercised without minting a
+  # version number that then exists forever.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      - name: Install PyInstaller
+        shell: bash
+        # Quoted: the `: ` inside `:all:` would otherwise read as a YAML key.
+        run: "pip install --only-binary :all: pyinstaller"
+
+      - name: Build
+        shell: bash
+        run: pyinstaller --clean --noconfirm packaging/anamorph.spec
+
+      - name: The bundle has to actually start
+        # A build that produces files is not a build that produces an app. The
+        # offscreen platform needs no display, and a bundle missing a Qt plugin
+        # or a hidden import dies here rather than on the operator's machine.
+        # Exit 124 is the timeout firing, which means it reached the event loop.
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cd dist/Anamorph
+          if [ "${{ runner.os }}" = "Windows" ]; then BIN=./Anamorph.exe; else BIN=./Anamorph; fi
+          set +e
+          timeout 60 "$BIN"
+          code=$?
+          set -e
+          if [ $code -ne 124 ]; then
+            echo "::error::The bundle exited with $code instead of running. It did not start."
+            exit 1
+          fi
+          echo "Started and reached the event loop."
+
+      - name: The licence texts have to be inside it
+        # LGPL-3 and GPL-3 both ask that whoever receives the binary can read
+        # the terms, and the repository does not travel inside a binary.
+        shell: bash
+        run: |
+          for f in LICENSE LGPL-3.0.txt THIRD-PARTY-NOTICES.md; do
+            find dist/Anamorph -name "$f" | grep -q . || {
+              echo "::error::$f is missing from the bundle"; exit 1; }
+          done
+          echo "All three present."
+
+      - name: Package
+        shell: bash
+        run: |
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a -tzip "Anamorph-${{ runner.os }}.zip" Anamorph > /dev/null
+          else
+            tar czf "Anamorph-${{ runner.os }}.tar.gz" Anamorph
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Anamorph-${{ runner.os }}
+          path: |
+            dist/Anamorph-*.zip
+            dist/Anamorph-*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    # Only a tag becomes a release; `workflow_dispatch` stops here with the
+    # artifacts attached to the run, which is what makes it safe to test with.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          draft: true
+          body: |
+            Unsigned builds. Windows SmartScreen and macOS Gatekeeper will
+            warn; the macOS build is not notarised.
+
+            These are one-directory bundles: Qt ships as ordinary replaceable
+            files beside the executable, and the GPL-3, LGPL-3 and third-party
+            notices are inside under `licenses/`.
