@@ -1,7 +1,7 @@
 # Anamorph - projection mapping
 # Copyright (C) 2026 Kaio Augusto
 #
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-only
 
 """Turn a pytest JUnit report into something readable without opening a log.
 
@@ -140,7 +140,7 @@ def summarise(failures: List[Failure], totals: dict, label: str) -> str:
         "|---|---|---|",
     ]
     for failure in failures:
-        where = f"`{failure.file}:{failure.line}`" if failure.file else "—"
+        where = f"`{failure.file}:{failure.line}`" if failure.file else "-"
         message = failure.message.replace("|", "\\|") or "(no message)"
         lines.append(f"| `{failure.test}` | {where} | {message} |")
     lines.append("")

@@ -1,7 +1,7 @@
 # Anamorph - projection mapping
 # Copyright (C) 2026 Kaio Augusto
 #
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-only
 
 """Picker for the slice of media that feeds a surface.
 
