@@ -1281,7 +1281,10 @@ class PropertyPanel(QWidget):
         self._update_corner_pin_controls()
         self._commit("Clear Media")
 
-    def _update_media(self, media: MediaRef) -> None:
+    def _update_media(self, media: Optional[MediaRef]) -> None:
+        # `None` is not an edge case here, it is how the panel is cleared when
+        # the selection goes away. The body has always handled it; only the
+        # annotation claimed otherwise.
         if media and media.path:
             self.media_label.setText(f"{media.kind}: {media.path}")
             self.media_label.setStyleSheet("color: #00d4aa;")
