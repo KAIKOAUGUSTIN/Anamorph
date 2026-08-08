@@ -2,7 +2,7 @@
 
 <img src="assets/icon.png" alt="" width="96" align="right">
 
-[![Licence: GPL v3](https://img.shields.io/badge/licence-GPL--3.0--only-blue.svg)](LICENSE)
+[![Licence: GPL v3](https://img.shields.io/badge/licence-GPL--3.0--only-blue.svg)](LICENSE) [![Tests](https://github.com/KAIKOAUGUSTIN/Anamorph/actions/workflows/tests.yml/badge.svg)](https://github.com/KAIKOAUGUSTIN/Anamorph/actions/workflows/tests.yml) [![Release](https://github.com/KAIKOAUGUSTIN/Anamorph/actions/workflows/release.yml/badge.svg)](https://github.com/KAIKOAUGUSTIN/Anamorph/actions/workflows/release.yml)
 
 Projection mapping: take a video or an image, cut it into surfaces, and land
 each surface exactly on the thing you are projecting onto - a wall, a column,
