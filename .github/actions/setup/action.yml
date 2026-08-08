@@ -23,7 +23,9 @@ runs:
 
     - name: Install Qt runtime libraries
       # PySide6 wheels ship Qt but not its system dependencies; without these,
-      # importing QtGui fails on libEGL before any test runs.
+      # importing QtGui fails on libEGL before any test runs. Linux only:
+      # the Windows and macOS wheels are self-contained.
+      if: runner.os == 'Linux'
       shell: bash
       run: |
         sudo apt-get update
@@ -36,7 +38,7 @@ runs:
     - name: Install a software OpenGL stack
       # xvfb gives Qt a real X display; the Mesa DRI drivers give it a
       # rasteriser, since a CI runner has no GPU.
-      if: inputs.opengl == 'true'
+      if: inputs.opengl == 'true' && runner.os == 'Linux'
       shell: bash
       run: |
         sudo apt-get install -y --no-install-recommends \

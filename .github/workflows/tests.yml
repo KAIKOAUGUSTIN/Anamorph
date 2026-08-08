@@ -6,58 +6,48 @@ on:
   pull_request:
 
 jobs:
-  # One job per test file, so a red tick names the area rather than saying
-  # "the suite". The list is read from the repository instead of written out
-  # here: a new suite that CI silently ignored would be worse than no split.
-  discover:
-    name: list suites
-    runs-on: ubuntu-latest
-    outputs:
-      suites: ${{ steps.list.outputs.suites }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - id: list
-        run: |
-          suites=$(ls tests/test_*.py \
-            | grep -v 'test_render_gl\.py' \
-            | xargs -n1 basename \
-            | sed 's/^test_//; s/\.py$//' \
-            | jq -R . | jq -sc .)
-          echo "suites=$suites" >> "$GITHUB_OUTPUT"
-          echo "Suites: $suites"
-
-  suite:
-    name: ${{ matrix.suite }}
-    needs: discover
-    runs-on: ubuntu-latest
+  # One job per operating system, not per test file. A failing test is named
+  # by its annotation - file, test, line, message, on the diff itself - which
+  # is a better signal than a job called "masks", and it is the only shape
+  # that survives adding a second platform: 25 suites times three systems
+  # would be 75 jobs for one push.
+  test:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
-      # Without this, the first red suite cancels the rest and the run says
-      # nothing about whether anything else is also broken.
+      # One platform failing must not cancel the others: "does this break on
+      # Windows only?" is exactly the question the matrix exists to answer.
       fail-fast: false
       matrix:
-        suite: ${{ fromJSON(needs.discover.outputs.suites) }}
+        os:
+          - ubuntu-latest
+          # Add `windows-latest` and `macos-latest` here to cover them. Both
+          # need a shakedown run first - the suite has never been executed on
+          # either, and path handling and the OpenCV video fixture are where
+          # it would show.
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
 
-      - name: pytest tests/test_${{ matrix.suite }}.py
+      - name: pytest
         # conftest.py pins QT_QPA_PLATFORM=offscreen, so no display is needed.
-        run: pytest tests/test_${{ matrix.suite }}.py -q
+        # No --maxfail: a run that stops at the first failure hides whether
+        # anything else is also broken, which is the whole point of reporting.
+        run: pytest -q --junitxml=report.xml
 
-  whole-suite:
-    # The split runs every file with a path argument. This one runs pytest
-    # with none, which is a different sys.path setup - the repo is not an
-    # installed package, and the suite once passed one way while failing to
-    # import the other. Keeping both invocation forms in CI is what stops
-    # that from coming back quietly.
-    name: whole suite (no path argument)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
+      - name: Run one suite by path
+        # A different sys.path setup from the bare `pytest` above: the repo is
+        # not an installed package, and pytest only puts the root on the path
+        # itself when invoked with no path argument. The suite once passed one
+        # way while failing to import the other, so CI uses both forms.
+        if: always()
+        run: pytest tests/test_homography.py -q
 
-      - run: pytest -q
+      - name: Report failures
+        # `always()`, because this is most needed on the run where pytest just
+        # failed the job.
+        if: always()
+        run: python .github/scripts/test_report.py report.xml "tests (${{ matrix.os }})"
 
   render:
     # The pixel tests skip on the `offscreen` platform, so without this job
@@ -80,9 +70,13 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
           set -o pipefail
-          xvfb-run -a pytest tests/test_render_gl.py -q | tee result.txt
+          xvfb-run -a pytest tests/test_render_gl.py -q --junitxml=report.xml | tee result.txt
           grep -qE "[0-9]+ passed" result.txt
           if grep -qE "[0-9]+ skipped" result.txt; then
             echo "::error::The pixel tests skipped - there is no usable GL context here."
             exit 1
           fi
+
+      - name: Report failures
+        if: always()
+        run: python .github/scripts/test_report.py report.xml "render_gl (OpenGL)"
