@@ -15,6 +15,7 @@ would still be green.
 import importlib.util
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -76,6 +77,34 @@ def test_it_points_at_the_line_that_failed(reporter, real_report):
     assert by_name["test_that_fails"].line == 5
     assert by_name["test_that_raises"].line == 8
     assert by_name["test_that_fails"].file.endswith("test_broken.py")
+
+
+def test_a_windows_traceback_gives_a_path_github_can_match(reporter):
+    """The Windows runner reports `tests\\test_playback.py:379:`.
+
+    A backslash path is not rejected by GitHub - it is silently unmatched, so
+    the annotation detaches from the file and floats at the top of the run.
+    That is the failure mode this script exists to prevent, appearing only on
+    the platform the suite runs on least.
+    """
+    case = ET.Element("testcase")
+
+    path, line = reporter.locate(case, "tests\\test_playback.py:379: AssertionError")
+
+    assert path == "tests/test_playback.py"
+    assert line == 379
+
+
+def test_a_windows_path_in_the_fallback_is_normalised_too(reporter):
+    """The fallback reads the testcase attributes, and on Windows those carry
+    backslashes as well - fixing only the traceback would leave the collection
+    error case broken."""
+    case = ET.Element("testcase", {"file": "tests\\test_masks.py", "line": "40"})
+
+    path, line = reporter.locate(case, "")
+
+    assert path == "tests/test_masks.py"
+    assert line == 41
 
 
 def test_the_message_survives(reporter, real_report):
