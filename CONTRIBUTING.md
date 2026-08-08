@@ -43,7 +43,7 @@ git commit --amend -s --no-edit
 and for a whole branch:
 
 ```bash
-git rebase --signoff main
+git rebase --signoff dev
 ```
 
 By signing off you agree to the following, which is the DCO version 1.1
@@ -111,13 +111,38 @@ your own copyright line on the files you touched, add it below the existing
 one — you keep the copyright on your work either way, whether or not the line
 is there.
 
+## Which branch
+
+Two long-lived branches, and neither is written to directly.
+
+- **`dev`** is where work integrates. It is the default branch and the target
+  for every pull request.
+- **`main`** is what has been released. Nothing reaches it except a merge from
+  `dev` when a version goes out.
+
+So the loop is: branch off `dev`, open a pull request back into `dev`, and
+releases travel `dev` → `main`.
+
+```bash
+git switch dev && git pull
+git switch -c feature/curved-masks
+```
+
+Name it `feature/<what>` or `fix/<what>`. **Not `dev/<what>`** — that one
+looks tidy and breaks every clone. Git stores refs as files and directories,
+so `refs/heads/dev` is a file while `refs/heads/dev/anything` needs `dev` to
+be a directory. GitHub will happily create both on the server, and then every
+`git fetch` fails with `cannot lock ref 'refs/remotes/origin/dev'`. The
+convention is not cosmetic; it is the only one that coexists with a branch
+called `dev`.
+
 ## Before you open a pull request
 
 ```bash
 pytest
 ```
 
-631 tests, all offscreen. The rendering tests need a real OpenGL context and
+637 tests, all offscreen. The rendering tests need a real OpenGL context and
 skip without one; to run those for real:
 
 ```bash
