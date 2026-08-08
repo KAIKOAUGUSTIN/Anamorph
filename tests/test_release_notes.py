@@ -159,18 +159,44 @@ def test_the_changelog_has_the_marker_the_script_writes_against(release):
     assert "<!-- releases -->" in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
 
-def test_dry_run_writes_nothing(release, monkeypatch, capsys, tmp_path):
-    """The flag exists so an endpoint can be tried before it is trusted with a
-    release. If it wrote anyway, the first experiment would move the version."""
-    changelog = release.CHANGELOG
-    before = changelog.read_text(encoding="utf-8")
-    about_before = (release.ROOT / "about.py").read_text(encoding="utf-8")
+@pytest.fixture
+def unreleased(release, monkeypatch):
+    """One commit waiting for a release, regardless of the real repository.
 
-    monkeypatch.setattr(release.sys, "argv", ["next_release.py", "--dry-run"])
+    The first version of this called `main()` against the working tree, and it
+    broke the moment a tag was cut: `git log <tag>..HEAD` went empty and the
+    run took the "nothing to release" path. A test that depends on where HEAD
+    happens to be cannot state what it claims to.
+    """
+    monkeypatch.setattr(release, "last_tag", lambda: "v0.1.0")
+    monkeypatch.setattr(
+        release, "commits_since",
+        lambda tag: [release.Commit("abc1234", "fix: a wedge in the circle", "")],
+    )
     for name in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL"):
         monkeypatch.delenv(name, raising=False)
 
+
+def test_dry_run_writes_nothing(release, monkeypatch, capsys, unreleased):
+    """The flag exists so an endpoint can be tried before it is trusted with a
+    release. If it wrote anyway, the first experiment would move the version."""
+    before = release.CHANGELOG.read_text(encoding="utf-8")
+    about_before = (release.ROOT / "about.py").read_text(encoding="utf-8")
+
+    monkeypatch.setattr(release.sys, "argv", ["next_release.py", "--dry-run"])
+
     assert release.main() == 0
     assert "would prepend" in capsys.readouterr().out
-    assert changelog.read_text(encoding="utf-8") == before
+    assert release.CHANGELOG.read_text(encoding="utf-8") == before
     assert (release.ROOT / "about.py").read_text(encoding="utf-8") == about_before
+
+
+def test_nothing_since_the_last_tag_is_not_a_release(release, monkeypatch, capsys):
+    """Every merge runs this, and most merges are already released. Minting a
+    version for an empty range would fill the tag list with noise."""
+    monkeypatch.setattr(release, "last_tag", lambda: "v0.2.0")
+    monkeypatch.setattr(release, "commits_since", lambda tag: [])
+    monkeypatch.setattr(release.sys, "argv", ["next_release.py"])
+
+    assert release.main() == 0
+    assert "release=no" in capsys.readouterr().out
