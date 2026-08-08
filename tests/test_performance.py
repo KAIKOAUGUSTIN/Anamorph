@@ -18,14 +18,14 @@ import time
 
 import pytest
 
-from pm.model.project import Project
-from pm.model.shapes import (
+from model.project import Project
+from model.shapes import (
     circle_from_center,
     mask_from_rect,
     mesh_from_rect,
     polygon_from_points,
 )
-from pm.render.geometry_cache import GeometryCache, build, signature
+from render.geometry_cache import GeometryCache, build, signature
 
 
 def _busy_project(count: int) -> Project:
@@ -85,7 +85,7 @@ def test_moving_one_surface_rebuilds_only_that_one():
 
 def test_a_replaced_but_identical_shape_is_still_a_hit():
     """Undo swaps in a fresh object; keying on identity would rebuild the lot."""
-    from pm.model.shapes import shape_from_dict, shape_to_dict
+    from model.shapes import shape_from_dict, shape_to_dict
 
     project = _busy_project(8)
     cache = GeometryCache()
@@ -211,7 +211,7 @@ def test_dragging_a_mesh_in_a_busy_project_stays_interactive():
 
 def test_the_vectorised_patch_beats_a_frame_budget():
     """One mesh's tessellation used to be 5ms on its own."""
-    from pm.render.mesh import tessellate_mesh
+    from render.mesh import tessellate_mesh
 
     mesh = mesh_from_rect((0.0, 0.0), 100.0, rows=3, cols=3)
     tessellate_mesh(mesh.points, mesh.rows, mesh.cols)

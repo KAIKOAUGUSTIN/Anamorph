@@ -15,9 +15,9 @@ import pytest
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QPainterPath, QUndoStack
 
-from pm.model.commands import duplicate_shape
-from pm.model.project import Project
-from pm.model.shapes import (
+from model.commands import duplicate_shape
+from model.project import Project
+from model.shapes import (
     Mask,
     active_masks,
     circle_from_center,
@@ -27,7 +27,7 @@ from pm.model.shapes import (
     shape_from_dict,
     shape_to_dict,
 )
-from pm.render.mesh import circle_ring, triangulate_with_holes
+from render.mesh import circle_ring, triangulate_with_holes
 
 QUAD = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
 
@@ -153,7 +153,7 @@ def test_duplicating_a_surface_carries_the_hole_with_it():
 
 @pytest.fixture
 def canvas(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     project.add_shape(polygon_from_points(list(QUAD), name="wall"))
@@ -264,7 +264,7 @@ def test_scaling_the_surface_scales_the_hole(canvas):
 
 
 def test_a_circle_can_be_masked_too(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     circle = circle_from_center((100.0, 100.0), 50.0)
@@ -281,7 +281,7 @@ def test_a_circle_can_be_masked_too(qapp):
 
 @pytest.fixture
 def panel(qapp):
-    from pm.ui.property_panel import PropertyPanel
+    from ui.property_panel import PropertyPanel
 
     project = Project()
     shape = polygon_from_points(list(QUAD))

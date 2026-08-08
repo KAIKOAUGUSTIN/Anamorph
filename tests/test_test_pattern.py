@@ -6,7 +6,7 @@
 import pytest
 from PySide6.QtGui import QImage, QUndoStack
 
-from pm.render.test_pattern import (
+from render.test_pattern import (
     BORDERS,
     CHECKER,
     GRID,
@@ -68,8 +68,8 @@ def test_available_patterns_matches_the_combo_entries():
 
 
 def test_pattern_choice_is_persisted_on_the_project(qapp):
-    from pm.io.project_io import load_project, save_project
-    from pm.model.project import Project
+    from fileio.project_io import load_project, save_project
+    from model.project import Project
     import tempfile
     import os
 
@@ -87,7 +87,7 @@ def test_pattern_choice_is_persisted_on_the_project(qapp):
 
 
 def test_toolbar_enables_the_pattern_picker_with_test_mode(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     window = MainWindow()
     assert not window.pattern_combo.isEnabled()

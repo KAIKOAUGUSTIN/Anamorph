@@ -6,7 +6,7 @@
 import numpy as np
 import pytest
 
-from pm.render.homography import (
+from render.homography import (
     apply_matrix,
     canvas_to_uv_matrix,
     corner_uv_assignment,

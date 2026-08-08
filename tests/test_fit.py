@@ -5,7 +5,7 @@
 
 import pytest
 
-from pm.render.fit import COVER, CONTAIN, STRETCH, WARP, content_rect, leaves_unit_square
+from render.fit import COVER, CONTAIN, STRETCH, WARP, content_rect, leaves_unit_square
 
 
 def test_stretch_fills_the_box():

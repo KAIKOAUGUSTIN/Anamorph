@@ -5,8 +5,8 @@
 
 import pytest
 
-from pm.model.project import Project
-from pm.model.shapes import polygon_from_points
+from model.project import Project
+from model.shapes import polygon_from_points
 
 QUAD = [(70.0, 20.0), (190.0, 20.0), (250.0, 240.0), (10.0, 240.0)]
 PENTAGON = QUAD + [(130.0, 260.0)]
@@ -14,7 +14,7 @@ PENTAGON = QUAD + [(130.0, 260.0)]
 
 @pytest.fixture
 def panel(qapp):
-    from pm.ui.property_panel import PropertyPanel
+    from ui.property_panel import PropertyPanel
 
     return PropertyPanel()
 
@@ -99,7 +99,7 @@ def test_reset_corners_ignores_non_quads(panel):
 
 
 def test_origin_handle_is_highlighted_on_a_pinned_quad(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     shape = polygon_from_points(list(QUAD))
@@ -120,7 +120,7 @@ def test_origin_handle_is_highlighted_on_a_pinned_quad(qapp):
 
 
 def test_handles_stay_neutral_without_corner_pin(qapp):
-    from pm.ui.canvas_editor import CanvasEditor
+    from ui.canvas_editor import CanvasEditor
 
     project = Project()
     shape = polygon_from_points(list(QUAD))  # no media assigned

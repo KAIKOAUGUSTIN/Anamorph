@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from pm.app_main import run
+from app_main import run
 
 
 if __name__ == "__main__":

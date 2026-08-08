@@ -16,10 +16,19 @@ import pytest
 
 @pytest.fixture(scope="session", autouse=True)
 def _use_qt_test_paths():
-    """Keep the persisted session out of the user's real app data."""
-    from PySide6.QtCore import QStandardPaths
+    """Keep the persisted session out of the user's real app data.
+
+    The names are set here for the same reason `app_main` sets them: they are
+    what QStandardPaths builds AppDataLocation from, and a test suite running
+    against a differently-shaped path would not be exercising the real one.
+    """
+    from PySide6.QtCore import QCoreApplication, QStandardPaths
+
+    from about import APP_NAME, ORGANIZATION
 
     QStandardPaths.setTestModeEnabled(True)
+    QCoreApplication.setApplicationName(APP_NAME)
+    QCoreApplication.setOrganizationName(ORGANIZATION)
     yield
 
 
@@ -36,7 +45,7 @@ def _clean_session_file():
 
     base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
     if base:
-        shutil.rmtree(f"{base}/ProjectionMapper", ignore_errors=True)
+        shutil.rmtree(base, ignore_errors=True)
     yield
 
 

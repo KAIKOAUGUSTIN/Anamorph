@@ -9,9 +9,9 @@ import tempfile
 import pytest
 from PySide6.QtWidgets import QMessageBox
 
-from pm.io.project_io import load_project, save_project
-from pm.model.project import Project
-from pm.model.shapes import polygon_from_points
+from fileio.project_io import load_project, save_project
+from model.project import Project
+from model.shapes import polygon_from_points
 
 QUAD = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
 
@@ -28,7 +28,7 @@ class _FakeDialog:
 
 @pytest.fixture
 def window(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     yield win
@@ -129,7 +129,7 @@ def test_opening_a_file_survives_a_shutdown_save(window, monkeypatch, tmp_path):
     save_project(on_disk, path)
 
     monkeypatch.setattr(
-        "pm.ui.main_window.QFileDialog.getOpenFileName",
+        "ui.main_window.QFileDialog.getOpenFileName",
         staticmethod(lambda *a, **k: (path, "")),
     )
     _answer_with(monkeypatch, window, QMessageBox.Discard)
@@ -149,7 +149,7 @@ def test_an_opened_project_always_has_somewhere_to_project(window, monkeypatch, 
     save_project(bare, path)
 
     monkeypatch.setattr(
-        "pm.ui.main_window.QFileDialog.getOpenFileName",
+        "ui.main_window.QFileDialog.getOpenFileName",
         staticmethod(lambda *a, **k: (path, "")),
     )
     _answer_with(monkeypatch, window, QMessageBox.Discard)

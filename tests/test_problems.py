@@ -14,38 +14,38 @@ import logging
 
 import pytest
 
-from pm.ui.problem_log import MAX_PROBLEMS, ProblemLog
+from ui.problem_log import MAX_PROBLEMS, ProblemLog
 
 
 @pytest.fixture
 def log():
     log = ProblemLog()
-    log.install("pm.test")
+    log.install("app.test")
     yield log
-    log.uninstall("pm.test")
+    log.uninstall("app.test")
 
 
 # --- collection -------------------------------------------------------------
 
 def test_a_warning_from_the_app_is_collected(log):
-    logging.getLogger("pm.test.decoder").warning("Could not open %s", "/x.mp4")
+    logging.getLogger("app.test.decoder").warning("Could not open %s", "/x.mp4")
 
     assert log.count() == 1
     assert log.latest().message == "Could not open /x.mp4"
-    assert log.latest().source == "pm.test.decoder"
+    assert log.latest().source == "app.test.decoder"
 
 
 def test_an_error_is_marked_as_one(log):
-    logging.getLogger("pm.test").error("gone wrong")
-    logging.getLogger("pm.test").warning("less wrong")
+    logging.getLogger("app.test").error("gone wrong")
+    logging.getLogger("app.test").warning("less wrong")
 
     assert log.error_count() == 1
     assert log.count() == 2
 
 
 def test_chatter_below_warning_is_ignored(log):
-    logging.getLogger("pm.test").info("just so you know")
-    logging.getLogger("pm.test").debug("noise")
+    logging.getLogger("app.test").info("just so you know")
+    logging.getLogger("app.test").debug("noise")
 
     assert log.count() == 0
 
@@ -54,7 +54,7 @@ def test_a_new_problem_is_announced(log):
     seen = []
     log.problem_added.connect(seen.append)
 
-    logging.getLogger("pm.test").warning("something")
+    logging.getLogger("app.test").warning("something")
 
     assert len(seen) == 1 and seen[0].message == "something"
 
@@ -62,7 +62,7 @@ def test_a_new_problem_is_announced(log):
 def test_the_list_is_capped(log):
     """A decoder failing every frame must not eat the machine."""
     for index in range(MAX_PROBLEMS + 50):
-        log.add(logging.WARNING, "pm.test", f"problem {index}")
+        log.add(logging.WARNING, "app.test", f"problem {index}")
 
     assert log.count() == MAX_PROBLEMS
     assert log.latest().message == f"problem {MAX_PROBLEMS + 49}"
@@ -70,17 +70,17 @@ def test_the_list_is_capped(log):
 
 
 def test_installing_twice_does_not_double_up(log):
-    log.install("pm.test")
+    log.install("app.test")
 
-    logging.getLogger("pm.test").warning("once")
+    logging.getLogger("app.test").warning("once")
 
     assert log.count() == 1
 
 
 def test_uninstalling_stops_the_collection(log):
-    log.uninstall("pm.test")
+    log.uninstall("app.test")
 
-    logging.getLogger("pm.test").warning("into the void")
+    logging.getLogger("app.test").warning("into the void")
 
     assert log.count() == 0
 
@@ -93,7 +93,7 @@ def test_a_broken_format_string_does_not_take_the_app_with_it(log):
     this handler is reached - which says nothing about this handler.
     """
     record = logging.LogRecord(
-        "pm.test", logging.WARNING, __file__, 0, "%d items", ("not a number",), None
+        "app.test", logging.WARNING, __file__, 0, "%d items", ("not a number",), None
     )
 
     log._handler.emit(record)
@@ -103,13 +103,13 @@ def test_a_broken_format_string_does_not_take_the_app_with_it(log):
 
 
 def test_clearing_empties_the_list(log):
-    logging.getLogger("pm.test").warning("something")
+    logging.getLogger("app.test").warning("something")
     log.clear()
     assert log.count() == 0 and log.latest() is None
 
 
 def test_a_problem_reads_like_a_line_in_a_list(log):
-    problem = log.add(logging.ERROR, "pm.test", "the projector is on fire")
+    problem = log.add(logging.ERROR, "app.test", "the projector is on fire")
 
     line = problem.line()
     assert "the projector is on fire" in line
@@ -120,8 +120,8 @@ def test_a_problem_reads_like_a_line_in_a_list(log):
 # --- the real call sites reach it ------------------------------------------
 
 def test_a_clip_that_will_not_open_shows_up(tmp_path):
-    from pm.media.clip_pool import ClipPool
-    from pm.model.media import MediaRef
+    from media.clip_pool import ClipPool
+    from model.media import MediaRef
 
     log = ProblemLog()
     log.install()
@@ -135,7 +135,7 @@ def test_a_clip_that_will_not_open_shows_up(tmp_path):
 
 
 def test_a_session_that_will_not_parse_shows_up(tmp_path, qapp):
-    from pm.model.project_store import ProjectStore
+    from model.project_store import ProjectStore
 
     log = ProblemLog()
     log.install()
@@ -157,8 +157,8 @@ def test_a_backup_that_cannot_be_written_says_so(tmp_path, monkeypatch):
     matters. Losing the safety net must not stop the save itself."""
     import shutil
 
-    from pm.io import project_io
-    from pm.model.project import Project
+    from fileio import project_io
+    from model.project import Project
 
     path = tmp_path / "show.pmap.json"
     project_io.save_project(Project(), str(path))
@@ -186,11 +186,11 @@ def test_a_backup_that_cannot_be_written_says_so(tmp_path, monkeypatch):
 # --- the window -------------------------------------------------------------
 
 def test_the_window_collects_problems(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     try:
-        logging.getLogger("pm.somewhere").warning("a thing went wrong")
+        logging.getLogger("ui.somewhere").warning("a thing went wrong")
 
         assert win.problem_log.count() >= 1
         assert win.problems_button.isVisibleTo(win)
@@ -200,8 +200,61 @@ def test_the_window_collects_problems(qapp):
         win.close()
 
 
+def test_every_module_of_this_app_is_on_the_list(qapp):
+    """`PACKAGES` decides whose warnings reach the operator, and a module
+    missing from it fails silently - the failure is logged and nobody ever
+    sees it. That is how `app_paths` was left off when it was written.
+    """
+    import subprocess
+    from pathlib import Path
+
+    from about import PACKAGES
+
+    root = Path(__file__).resolve().parent.parent
+    tracked = subprocess.run(
+        ["git", "ls-files", "*.py"],
+        cwd=root, capture_output=True, text=True, check=True,
+    ).stdout.split()
+
+    importable = set()
+    for name in tracked:
+        head, _, tail = name.partition("/")
+        if head == "tests":
+            continue
+        if not tail:
+            importable.add(head[:-len(".py")])
+        elif (root / head / "__init__.py").exists():
+            importable.add(head)
+
+    missing = importable - set(PACKAGES)
+    assert not missing, f"warnings from {sorted(missing)} would never be shown"
+
+
+def test_a_dependency_talking_to_itself_is_not_the_operators_problem(qapp):
+    """The log listens on the root logger now that the app's modules are
+    top-level and share no ancestor. A colour-profile warning from a decoding
+    library is not something anyone can act on during a show, and a list full
+    of them is a list nobody reads."""
+    from ui.main_window import MainWindow
+
+    win = MainWindow()
+    try:
+        win.problem_log.clear()
+
+        logging.getLogger("PIL.TiffImagePlugin").warning("unknown tag")
+        logging.getLogger("some_dependency").error("internal state")
+
+        assert win.problem_log.count() == 0
+
+        logging.getLogger("render.gl_renderer").warning("this one is ours")
+        assert win.problem_log.count() == 1
+    finally:
+        win.project.mark_saved()
+        win.close()
+
+
 def test_the_button_stays_hidden_when_nothing_is_wrong(qapp):
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     try:
@@ -215,11 +268,11 @@ def test_the_button_stays_hidden_when_nothing_is_wrong(qapp):
 
 
 def test_the_dialog_lists_newest_first(qapp):
-    from pm.ui.problem_log import ProblemDialog
+    from ui.problem_log import ProblemDialog
 
     log = ProblemLog()
-    log.add(logging.WARNING, "pm.test", "first")
-    log.add(logging.ERROR, "pm.test", "second")
+    log.add(logging.WARNING, "app.test", "first")
+    log.add(logging.ERROR, "app.test", "second")
     dialog = ProblemDialog(log)
     try:
         assert dialog.list.count() == 2
@@ -230,7 +283,7 @@ def test_the_dialog_lists_newest_first(qapp):
 
 
 def test_the_dialog_says_when_nothing_has_gone_wrong(qapp):
-    from pm.ui.problem_log import ProblemDialog
+    from ui.problem_log import ProblemDialog
 
     dialog = ProblemDialog(ProblemLog())
     try:
@@ -241,12 +294,12 @@ def test_the_dialog_says_when_nothing_has_gone_wrong(qapp):
 
 
 def test_the_dialog_follows_new_problems(qapp):
-    from pm.ui.problem_log import ProblemDialog
+    from ui.problem_log import ProblemDialog
 
     log = ProblemLog()
     dialog = ProblemDialog(log)
     try:
-        log.add(logging.WARNING, "pm.test", "just happened")
+        log.add(logging.WARNING, "app.test", "just happened")
         assert dialog.list.count() == 1
     finally:
         dialog.close()
@@ -257,7 +310,7 @@ def test_the_dialog_follows_new_problems(qapp):
 def test_the_file_shortcuts_are_actually_bound(qapp):
     """The help sheet promised Ctrl+N/O/S; the actions had no keys behind them."""
     from PySide6.QtGui import QKeySequence
-    from pm.ui.main_window import MainWindow
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     try:
@@ -274,8 +327,8 @@ def test_every_shortcut_the_help_sheet_names_exists(qapp):
     """The sheet is the manual; a key on it that does nothing is worse than
     no sheet at all."""
     from PySide6.QtGui import QKeySequence
-    from pm.ui.help_dialog import SHORTCUTS
-    from pm.ui.main_window import MainWindow
+    from ui.help_dialog import SHORTCUTS
+    from ui.main_window import MainWindow
 
     win = MainWindow()
     try:
