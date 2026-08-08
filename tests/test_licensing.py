@@ -1,7 +1,7 @@
 # Anamorph - projection mapping
 # Copyright (C) 2026 Kaio Augusto
 #
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-only
 
 """The licence, kept true by something other than memory.
 
@@ -67,7 +67,7 @@ def test_the_headers_agree_with_the_declared_licence():
     """`about` and the file headers must not drift apart."""
     header = (ROOT / "about.py").read_text(encoding="utf-8")
     assert SPDX in header
-    assert LICENSE_ID == "GPL-3.0-or-later", (
+    assert LICENSE_ID == "GPL-3.0-only", (
         "the version is a decision, not an accident - changing it is a "
         "relicensing that every contributor has to agree to"
     )
@@ -83,7 +83,7 @@ def test_the_licence_file_is_the_gpl_3():
 
 def test_the_readme_states_the_licence_and_points_at_the_terms():
     text = prose("README.md")
-    assert "GNU General Public License, version 3 or later" in text
+    assert "GNU General Public License, version 3" in text
     assert "LICENSE" in text
     assert "CONTRIBUTING.md" in text
     assert "WITHOUT ANY" in text, "no-warranty statement missing"

@@ -1,9 +1,11 @@
 # Anamorph
 
-[![Licence: GPL v3+](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue.svg)](LICENSE)
+<img src="assets/icon.png" alt="" width="96" align="right">
+
+[![Licence: GPL v3](https://img.shields.io/badge/licence-GPL--3.0--only-blue.svg)](LICENSE)
 
 Projection mapping: take a video or an image, cut it into surfaces, and land
-each surface exactly on the thing you are projecting onto — a wall, a column,
+each surface exactly on the thing you are projecting onto - a wall, a column,
 a set piece, a shop window.
 
 One canvas, any number of projectors. Each projector shows its own region of
@@ -14,6 +16,27 @@ separate artworks that happen to be pointed at the same building.
 ---
 
 ## Installing
+
+### Download a build
+
+Grab the archive for your system from
+[Releases](https://github.com/KAIKOAUGUSTIN/Anamorph/releases), unpack it
+anywhere, and run `Anamorph` from inside the folder. Nothing is installed and
+nothing is written outside your own user directory.
+
+Keep the folder together. Qt ships beside the executable as ordinary files, so
+that anyone can replace it with their own build - which is what Qt's licence
+asks of anything that bundles it. Moving the executable out on its own breaks
+that and breaks the app.
+
+**The builds are not signed.** Windows will show "Windows protected your PC":
+*More info* then *Run anyway*. macOS will refuse the first launch: right-click
+the app, choose *Open*, then confirm. Signing costs money rather than effort,
+and macOS notarisation needs a paid Apple account.
+
+The macOS build is for Apple Silicon. There is no Intel build.
+
+### Or run from source
 
 You need **Python 3.12 or newer**. (`numpy` has no build below that.)
 
@@ -28,8 +51,6 @@ pip install -r requirements.txt
 python projection_gui.py
 ```
 
-There is no installer yet — this runs from source.
-
 ---
 
 ## Your first surface, in five minutes
@@ -37,12 +58,12 @@ There is no installer yet — this runs from source.
 1. **Plug the projector in** and let the desktop see it as a second display.
 2. **Open the Outputs dialog** (`Outputs...` in the toolbar). Pick your
    projector under **Screen**. The canvas takes that projector's resolution
-   automatically the first time — leave it alone unless you know you want
+   automatically the first time - leave it alone unless you know you want
    something else.
 3. **Turn on Test Mode** and press **Project**. A calibration grid appears on
    the wall. Focus the projector and square it up physically as far as it will
    go; correct the rest with **Keystone** in the Outputs dialog. Physical
-   first, always — keystone throws away pixels.
+   first, always - keystone throws away pixels.
 4. **Turn Test Mode off.** Click **Polygon** in the toolbar and click on the
    canvas. A quad appears.
 5. **Load media**: with the surface selected, `Image` or `Video` in the
@@ -61,16 +82,16 @@ That is the whole loop. Everything else is refinement.
 
 ### Surfaces
 
-- **Polygon** — any number of corners. Each edge can be hidden, shortened, or
+- **Polygon** - any number of corners. Each edge can be hidden, shortened, or
   curved (`Alt` + double-click an edge). This is the workhorse.
-- **Circle** — an ellipse, dragged by four axis handles.
-- **Mesh** — a grid of control points that bends *between* its corners. For
+- **Circle** - an ellipse, dragged by four axis handles.
+- **Mesh** - a grid of control points that bends *between* its corners. For
   columns, cylinders, domes, hanging cloth: anything four corners cannot
   describe.
 
 You can change a surface's type later without losing its media or its name.
 
-**Masks** cut holes in a surface — a window, a doorway, a pillar standing in
+**Masks** cut holes in a surface - a window, a doorway, a pillar standing in
 front of the wall. `Ctrl+M`, then drag the red corners.
 
 **Groups** make several surfaces move as one (`Ctrl+G`). Useful for a window
@@ -91,7 +112,7 @@ The **Fit** setting decides how the image lands:
 makes an image sit flat on a wall you are looking at from an angle. It is the
 default the first time you drop media on a quad.
 
-**Source region** picks *which part* of the media feeds this surface —
+**Source region** picks *which part* of the media feeds this surface -
 "this wall shows the left third of the video". One clip can drive six
 surfaces, each taking a different slice, without six copies of the file.
 
@@ -100,7 +121,7 @@ surfaces, each taking a different slice, without six copies of the file.
 The whole show runs off one clock. `Space` plays and pauses everything; the
 toolbar shows the position and a rate for the show as a whole.
 
-Each surface has its own **Playback** settings — loop, speed, and an offset
+Each surface has its own **Playback** settings - loop, speed, and an offset
 that says where show-time zero lands in that clip. Two surfaces with the same
 file and the same settings share one decoder, which is what keeps them
 frame-accurate against each other.
@@ -114,18 +135,18 @@ also how you layer for now.
 
 In the Outputs dialog, each projector gets:
 
-- **Canvas region** — which part of the shared canvas it covers. Two
+- **Canvas region** - which part of the shared canvas it covers. Two
   projectors overlap here.
-- **Keystone** — four corners, for squaring the projector against the surface.
-- **Edge blend** — a ramp on the edges that meet a neighbour, so the seam
+- **Keystone** - four corners, for squaring the projector against the surface.
+- **Edge blend** - a ramp on the edges that meet a neighbour, so the seam
   disappears. Tune the curve by eye until the overlap stops showing as a
   bright or dark band.
-- **Colour** — projectors never match out of the box.
+- **Colour** - projectors never match out of the box.
 
 **Tile** sets up N projectors side by side, already overlapping, with matching
 blend ramps. It is the fastest way to start a two-projector rig.
 
-**Preview** shows what one projector sees — region, keystone, blend, colour —
+**Preview** shows what one projector sees - region, keystone, blend, colour -
 without turning the projector on.
 
 ---
@@ -133,22 +154,22 @@ without turning the projector on.
 ## When something goes wrong
 
 **Blackout (`B`)** kills every projector instantly. This is the panic button.
-It is not pause — pausing leaves the last frame on the wall. The editor keeps
+It is not pause - pausing leaves the last frame on the wall. The editor keeps
 working, and draws a red frame around the canvas so you know the projectors
 are dark.
 
-**A surface is hatched red** — its media file is not where the project expects
+**A surface is hatched red** - its media file is not where the project expects
 it. The toolbar shows how many are missing; click it to relink. Relinking
 works by folder, so pointing at one file's new home finds its neighbours too.
 
-**A warning appears in the toolbar** — something failed that was not fatal: a
+**A warning appears in the toolbar** - something failed that was not fatal: a
 codec this build cannot open, a file that would not parse. Click it for the
 list.
 
-**Nothing on the wall at all** — check, in order: is Blackout on, is
+**Nothing on the wall at all** - check, in order: is Blackout on, is
 **Project** on, does the output have a **Screen** assigned, is it **Enabled**.
 
-**The projection looks softer than it should** — the canvas is probably
+**The projection looks softer than it should** - the canvas is probably
 smaller than the projector. Check the resolution in the Outputs dialog and use
 **Match to screen**.
 
@@ -161,7 +182,7 @@ file** when the media lives near it, so you can copy the whole show folder to
 the machine driving the projectors and it still opens. Keep media in a folder
 beside the project and this works by itself.
 
-Saving keeps the previous version as `.bak`, and writes atomically — a crash
+Saving keeps the previous version as `.bak`, and writes atomically - a crash
 mid-save cannot destroy the good file.
 
 Work is autosaved to a session copy every 20 seconds. If the app dies, it
@@ -187,15 +208,15 @@ comes back with the unsaved work still there and tells you so. That copy is
 | `Space` | Play / pause the show |
 | `B` | Blackout |
 | `Ctrl+D` / `Ctrl+M` / `Ctrl+G` | Duplicate / mask / group |
-| `Ctrl+Z` | Undo — everything that changes the artwork is undoable |
+| `Ctrl+Z` | Undo - everything that changes the artwork is undoable |
 
 ---
 
 ## Supported media
 
-- **Images** — PNG, JPG, JPEG, BMP
-- **Video** — MP4, MOV, AVI, MKV
-- **Live** — any capture device OpenCV can open, by index
+- **Images** - PNG, JPG, JPEG, BMP
+- **Video** - MP4, MOV, AVI, MKV
+- **Live** - any capture device OpenCV can open, by index
 
 No audio yet.
 
@@ -214,7 +235,7 @@ them for real:
 xvfb-run -a env QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 pytest
 ```
 
-`CLAUDE.md` documents the internals and the reasoning behind them — read that
+`CLAUDE.md` documents the internals and the reasoning behind them - read that
 before changing anything, not this file.
 
 ---
@@ -222,18 +243,18 @@ before changing anything, not this file.
 ## Licence
 
 Anamorph is free software: you can redistribute it and modify it under the
-terms of the **GNU General Public License, version 3 or later**, as published
+terms of the **GNU General Public License, version 3**, as published
 by the Free Software Foundation. The full text is in [LICENSE](LICENSE).
 
 It is distributed in the hope that it will be useful, but **WITHOUT ANY
-WARRANTY** — without even the implied warranty of merchantability or fitness
+WARRANTY** - without even the implied warranty of merchantability or fitness
 for a particular purpose.
 
 In practice, what this means for you:
 
 - **Use it for anything**, including paid commercial shows. Using the program
   puts no obligation on you at all.
-- **If you distribute it** — modified or not, free or sold — you have to pass
+- **If you distribute it** - modified or not, free or sold - you have to pass
   on the source under the same licence, and keep the notices intact.
 - **Your shows are yours.** The licence covers this program's code, not the
   `.pmap.json` files you make with it or the media you project.
@@ -243,9 +264,9 @@ Third-party components and their licences are listed in
 
 ## Contributing
 
-Contributions come in under the same GPL-3.0-or-later, certified with a
+Contributions come in under the same GPL-3.0-only, certified with a
 [Developer Certificate of Origin](CONTRIBUTING.md) sign-off (`git commit -s`).
-You keep the copyright on what you write — nothing is assigned to anyone, and
+You keep the copyright on what you write - nothing is assigned to anyone, and
 as a result **this project cannot be relicensed or closed** without every
 contributor agreeing. That is the intent, and the DCO is what makes it
 structural rather than a promise.
@@ -258,4 +279,4 @@ Being straight about it: **audio**, **NDI / Spout / Syphon**, **scenes and
 cues**, **MIDI / OSC / DMX**, **mesh warp on the output stage** (projectors get
 four-corner keystone only), and **multiple media layers inside one surface**.
 
-There is also no packaged build — it runs from source.
+There is also no packaged build - it runs from source.

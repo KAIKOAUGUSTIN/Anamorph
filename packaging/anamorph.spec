@@ -1,7 +1,7 @@
 # Anamorph - projection mapping
 # Copyright (C) 2026 Kaio Augusto
 #
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-only
 
 """PyInstaller recipe for a distributable Anamorph.
 
@@ -32,6 +32,19 @@ LEGAL = [
     (str(ROOT / "licenses" / "LGPL-3.0.txt"), "licenses"),
     (str(ROOT / "THIRD-PARTY-NOTICES.md"), "licenses"),
 ]
+
+# The window and taskbar mark, resolved at runtime through
+# `app_paths.asset_path` so it is found from a checkout and from here alike.
+ASSETS = [(str(ROOT / "assets" / "icon.png"), "assets")]
+
+# The executable's own icon is a per-platform container: Windows wants .ico,
+# macOS .icns, and Linux takes it from the window rather than the file.
+if sys.platform == "win32":
+    ICON = str(ROOT / "assets" / "icon.ico")
+elif sys.platform == "darwin":
+    ICON = str(ROOT / "assets" / "icon.icns")
+else:
+    ICON = None
 
 # Qt modules PySide6-Essentials ships that this app never imports. Excluding
 # them is size, not correctness - but a projection tool gets downloaded on
@@ -65,7 +78,7 @@ a = Analysis(
     [str(ROOT / "projection_gui.py")],
     pathex=[str(ROOT)],
     binaries=[],
-    datas=LEGAL,
+    datas=LEGAL + ASSETS,
     hiddenimports=[],
     hookspath=[],
     runtime_hooks=[],
@@ -85,6 +98,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    icon=ICON,
 )
 
 coll = COLLECT(
