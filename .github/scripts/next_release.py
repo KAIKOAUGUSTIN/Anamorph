@@ -267,6 +267,12 @@ def main() -> int:
     sys.path.insert(0, str(ROOT))
     from about import VERSION
 
+    # `--dry-run` exists so the endpoint can be tried before it is trusted with
+    # a release: it prints what it would write and touches nothing. Without it
+    # the only way to find out whether the model answers is to merge something,
+    # and a first attempt should not have to be a tag.
+    dry_run = "--dry-run" in sys.argv[1:]
+
     tag = last_tag()
     commits = commits_since(tag)
     if not commits:
@@ -293,7 +299,15 @@ def main() -> int:
     version = next_version(VERSION, bump)
 
     print(f"{VERSION} -> {version} ({bump}): {why}")
-    prepend(render(version, sections))
+    entry = render(version, sections)
+
+    if dry_run:
+        print(f"\n--- would prepend to CHANGELOG.md "
+              f"({'model' if answer else 'fallback'}) ---\n{entry}", end="")
+        print("--- nothing written ---")
+        return 0
+
+    prepend(entry)
 
     about = ROOT / "about.py"
     about.write_text(

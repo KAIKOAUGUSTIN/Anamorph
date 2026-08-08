@@ -157,3 +157,20 @@ def test_empty_sections_are_left_out(release):
 def test_the_changelog_has_the_marker_the_script_writes_against(release):
     """Without it `prepend` would silently put the entry nowhere."""
     assert "<!-- releases -->" in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+
+def test_dry_run_writes_nothing(release, monkeypatch, capsys, tmp_path):
+    """The flag exists so an endpoint can be tried before it is trusted with a
+    release. If it wrote anyway, the first experiment would move the version."""
+    changelog = release.CHANGELOG
+    before = changelog.read_text(encoding="utf-8")
+    about_before = (release.ROOT / "about.py").read_text(encoding="utf-8")
+
+    monkeypatch.setattr(release.sys, "argv", ["next_release.py", "--dry-run"])
+    for name in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert release.main() == 0
+    assert "would prepend" in capsys.readouterr().out
+    assert changelog.read_text(encoding="utf-8") == before
+    assert (release.ROOT / "about.py").read_text(encoding="utf-8") == about_before
