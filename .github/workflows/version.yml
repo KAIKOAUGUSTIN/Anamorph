@@ -57,8 +57,22 @@ jobs:
         env:
           TAG: ${{ steps.decide.outputs.tag }}
           VERSION: ${{ steps.decide.outputs.version }}
-          GH_TOKEN: ${{ github.token }}
+          # A personal access token if one is configured, the job's own token
+          # otherwise. This is not a preference: GitHub refuses to start a
+          # workflow from an event created with `GITHUB_TOKEN`, to stop a
+          # workflow triggering itself forever. So a tag pushed with the job
+          # token is a tag `release.yml` never sees, and the release quietly
+          # does not happen. A PAT is what makes the tag a real event.
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
         run: |
+          if [ -n "${{ secrets.RELEASE_TOKEN }}" ]; then
+            git remote set-url origin \
+              "https://x-access-token:${{ secrets.RELEASE_TOKEN }}@github.com/${{ github.repository }}.git"
+          else
+            echo "::warning::No RELEASE_TOKEN. The tag will be pushed, but "\
+                 "GitHub will not start release.yml from it - run that "\
+                 "workflow manually against the tag, or add the secret."
+          fi
           git config user.name "Kaio Augusto"
           git config user.email "114446391+KAIKOAUGUSTIN@users.noreply.github.com"
 
@@ -81,15 +95,24 @@ jobs:
           git tag -a "$TAG" -m "Anamorph $VERSION"
           git push origin "$TAG"
 
-          # The changelog reaches `main` the way everything else does. The
-          # release is already building by now; this is bookkeeping catching up.
-          gh pr create --base main --head "$branch" \
-            --title "Release $TAG" \
-            --body "Changelog and version bump for \`$TAG\`.
-
-          The tag is already pushed and \`release.yml\` is building it. Merging
-          this brings \`CHANGELOG.md\` and \`about.VERSION\` onto \`main\`." \
-            || echo "::notice::A pull request for $branch already exists."
+          # The changelog reaches `main` the way everything else does.
+          #
+          # This is allowed to fail the job. The first version swallowed the
+          # error with `|| echo`, and the run went green while no pull request
+          # existed - the changelog sitting on a branch nobody was told about.
+          # A step that reports success when its work did not happen is worse
+          # than one that fails.
+          #
+          # If it fails with a permissions error, the repository setting
+          # "Allow GitHub Actions to create and approve pull requests"
+          # (Settings -> Actions -> General) is off. It is off by default.
+          if gh pr view "$branch" --json number >/dev/null 2>&1; then
+            echo "::notice::A pull request for $branch already exists."
+          else
+            gh pr create --base main --head "$branch" \
+              --title "Release $TAG" \
+              --body "Changelog and version bump for \`$TAG\`. Merging this brings \`CHANGELOG.md\` and \`about.VERSION\` onto \`main\`."
+          fi
 
       - name: Say what happened
         if: always()
