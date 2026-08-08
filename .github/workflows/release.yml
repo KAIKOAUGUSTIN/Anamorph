@@ -38,22 +38,29 @@ jobs:
         # A build that produces files is not a build that produces an app. The
         # offscreen platform needs no display, and a bundle missing a Qt plugin
         # or a hidden import dies here rather than on the operator's machine.
-        # Exit 124 is the timeout firing, which means it reached the event loop.
+        #
+        # Launched into the background and checked for a pulse, rather than run
+        # under `timeout`: that is GNU coreutils and does not exist on macOS,
+        # where the step failed with "command not found" - reporting that the
+        # app had not started when it had never been asked to. `kill -0` is
+        # POSIX and states the question directly: is it still alive?
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           cd dist/Anamorph
           if [ "${{ runner.os }}" = "Windows" ]; then BIN=./Anamorph.exe; else BIN=./Anamorph; fi
-          set +e
-          timeout 60 "$BIN"
-          code=$?
-          set -e
-          if [ $code -ne 124 ]; then
+          "$BIN" &
+          pid=$!
+          sleep 30
+          if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            echo "Still running after 30s: it started and reached the event loop."
+          else
+            set +e; wait "$pid"; code=$?; set -e
             echo "::error::The bundle exited with $code instead of running. It did not start."
             exit 1
           fi
-          echo "Started and reached the event loop."
 
       - name: The licence texts have to be inside it
         # LGPL-3 and GPL-3 both ask that whoever receives the binary can read
