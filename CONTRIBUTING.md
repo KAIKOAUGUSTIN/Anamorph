@@ -1,11 +1,11 @@
 # Contributing to Anamorph
 
 Anamorph is free software under the **GNU General Public License, version 3 or
-later**. Contributions come in under those same terms, and stay there — this
+later**. Contributions come in under those same terms, and stay there - this
 project is not going to be closed later, and the contribution process is built
 on that promise rather than on a document that reserves the right to break it.
 
-## Sign your work — the DCO
+## Sign your work - the DCO
 
 Anamorph uses the [Developer Certificate of Origin](https://developercertificate.org/)
 (DCO) rather than a Contributor Licence Agreement.
@@ -14,7 +14,7 @@ The difference matters, so it is worth stating plainly:
 
 - **You keep the copyright on what you write.** Nothing is assigned or
   transferred to anyone.
-- **Your contribution is licensed under GPL-3.0-or-later**, the same licence as
+- **Your contribution is licensed under GPL-3.0-only**, the same licence as
   the rest of the project.
 - Because no one holds a broad licence over your work, **the project cannot be
   relicensed or made proprietary** without asking every contributor. The DCO is
@@ -91,7 +91,7 @@ history, permanently.
 
 **Do not submit code you do not have the right to submit.** Code from another
 project under an incompatible licence, code owned by an employer who has not
-agreed, or code produced from a source you cannot account for — all of it
+agreed, or code produced from a source you cannot account for - all of it
 puts the whole project at risk, and unwinding it later means deleting
 functionality other people have come to rely on.
 
@@ -103,12 +103,12 @@ Every `.py` file carries this header, and a test fails if one does not:
 # Anamorph - projection mapping
 # Copyright (C) 2026 Kaio Augusto
 #
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-only
 ```
 
 New files need it too. If a contribution is substantial enough that you want
 your own copyright line on the files you touched, add it below the existing
-one — you keep the copyright on your work either way, whether or not the line
+one - you keep the copyright on your work either way, whether or not the line
 is there.
 
 ## Which branch
@@ -128,7 +128,7 @@ git switch dev && git pull
 git switch -c feature/curved-masks
 ```
 
-Name it `feature/<what>` or `fix/<what>`. **Not `dev/<what>`** — that one
+Name it `feature/<what>` or `fix/<what>`. **Not `dev/<what>`** - that one
 looks tidy and breaks every clone. Git stores refs as files and directories,
 so `refs/heads/dev` is a file while `refs/heads/dev/anything` needs `dev` to
 be a directory. GitHub will happily create both on the server, and then every
@@ -150,8 +150,8 @@ xvfb-run -a env QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1 pytest
 ```
 
 CI runs the suite once per operating system and once more for the rendering
-tests. A failure is annotated on the diff — file, test, line and the
-assertion — and listed in the job summary, so a red run does not mean
+tests. A failure is annotated on the diff - file, test, line and the
+assertion - and listed in the job summary, so a red run does not mean
 scrolling a log. It fails if the rendering tests *skip*: a skipped pixel
 suite is a green tick that proves nothing.
 
@@ -163,7 +163,7 @@ A few things this codebase cares about, which will come up in review:
   differently from the output is the failure this project has spent the most
   effort on. If you change how something renders, change both sides.
 - **Comments explain why, not what.** The reasoning in `CLAUDE.md` is the
-  house style — read it before changing anything.
+  house style - read it before changing anything.
 
 ## Reporting problems
 

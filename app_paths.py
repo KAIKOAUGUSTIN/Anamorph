@@ -1,7 +1,7 @@
 # Anamorph - projection mapping
 # Copyright (C) 2026 Kaio Augusto
 #
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-only
 
 """Where the session copy lives, and how it survives being renamed.
 
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -103,3 +104,15 @@ def _adopt(legacy: Path, base: Path) -> None:
                            source.name, exc)
         else:
             logger.info("Carried %s over from %s", source.name, legacy)
+
+
+def asset_path(name: str) -> Path:
+    """Where a bundled asset lives, from source or from a frozen build.
+
+    PyInstaller unpacks data files under `sys._MEIPASS`, which does not exist
+    when running from a checkout. Resolving through here rather than from
+    `__file__` is what stops the window icon from being present in development
+    and missing in the thing people actually download.
+    """
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base / "assets" / name

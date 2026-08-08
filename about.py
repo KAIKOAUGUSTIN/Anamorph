@@ -1,7 +1,7 @@
 # Anamorph - projection mapping
 # Copyright (C) 2026 Kaio Augusto
 #
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-only
 
 """Who this program is, and under what terms.
 
@@ -30,10 +30,13 @@ COPYRIGHT_YEARS = "2026"
 COPYRIGHT = f"Copyright (C) {COPYRIGHT_YEARS} {AUTHOR}"
 
 # The SPDX identifier is the machine-readable half: compliance scanners look
-# for exactly this string. "or-later" is the choice - the project can follow a
-# future GPL rather than being frozen at version 3.
-LICENSE_ID = "GPL-3.0-or-later"
-LICENSE_NAME = "GNU General Public License, version 3 or later"
+# for exactly this string. "only" is the choice, and it is deliberate: the
+# terms this project ships under are the ones its author read, not whatever a
+# future GPL turns out to say. The cost is symmetrical to the DCO's - with no
+# copyright assignment, moving to a later GPL would mean asking every
+# contributor, so in practice version 3 is where this stays.
+LICENSE_ID = "GPL-3.0-only"
+LICENSE_NAME = "GNU General Public License, version 3"
 LICENSE_URL = "https://www.gnu.org/licenses/gpl-3.0.html"
 
 HOMEPAGE = "https://github.com/KAIKOAUGUSTIN/Anamorph"
@@ -67,7 +70,7 @@ WARRANTY = (
 
 REDISTRIBUTION = (
     "This is free software, and you are welcome to redistribute it under the "
-    "conditions of the GNU General Public License, version 3 or later."
+    "conditions of the GNU General Public License, version 3."
 )
 
 
