@@ -47,6 +47,11 @@ from model.project import Project
 from model.project_store import available_screens, screen_geometry
 from ui.widgets import ArrowSpinBox, NoScrollComboBox, NoScrollSpinBox
 
+# The one-line explanation under each section of the dialog. Named because it
+# is worn by four of them, and four copies of a colour drift apart the first
+# time one is adjusted.
+HINT_STYLE = "color: #b8b8b8; font-size: 11px;"
+
 
 def _spin(minimum: float, maximum: float, step: float, decimals: int = 3) -> ArrowSpinBox:
     box = ArrowSpinBox()
@@ -253,7 +258,7 @@ class OutputDialog(QDialog):
             "projectors overlap here, and the blend below hides the seam."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #b8b8b8; font-size: 11px;")
+        hint.setStyleSheet(HINT_STYLE)
         outer.addWidget(hint)
 
         row = QHBoxLayout()
@@ -276,7 +281,7 @@ class OutputDialog(QDialog):
             "against the surface. This sits above the per-surface corner pin."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #b8b8b8; font-size: 11px;")
+        hint.setStyleSheet(HINT_STYLE)
         outer.addWidget(hint)
 
         self.corner_spins: List[List[ArrowSpinBox]] = []
@@ -309,7 +314,7 @@ class OutputDialog(QDialog):
             "stops showing as a bright or dark band."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #b8b8b8; font-size: 11px;")
+        hint.setStyleSheet(HINT_STYLE)
         outer.addWidget(hint)
 
         row = QHBoxLayout()
@@ -337,7 +342,7 @@ class OutputDialog(QDialog):
         outer = QVBoxLayout(group)
         hint = QLabel("Two projectors never match out of the box; pull them into line here.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #b8b8b8; font-size: 11px;")
+        hint.setStyleSheet(HINT_STYLE)
         outer.addWidget(hint)
 
         form = QFormLayout()
