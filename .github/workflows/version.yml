@@ -81,19 +81,36 @@ jobs:
           # the original design and the ruleset refused it, which was the
           # ruleset doing its job. So the commit goes to a branch of its own.
           branch="release/$TAG"
-          # `-B` rather than `-b`: a previous run that got this far and then
-          # failed would otherwise leave a branch name that blocks the retry.
-          git checkout -B "$branch"
-          git add CHANGELOG.md about.py
-          git commit -m "Release $TAG"
-          git push origin "$branch"
 
-          # The tag points at *that* commit rather than at `main`, so the
-          # binary built from it reports the version it was released as. A tag
-          # whose about.py still said the old number would put a lie in the
-          # About box, which is the one thing this repository will not ship.
-          git tag -a "$TAG" -m "Anamorph $VERSION"
-          git push origin "$TAG"
+          # A tag is the record that this version was cut. If it is already
+          # there, this is a re-run of a job that failed further down, and
+          # re-cutting would mean a second commit, a moved tag, and a build
+          # made from a tree nobody released. So the tag is the gate: past it,
+          # only the steps that had not finished are attempted.
+          #
+          # This job used to be un-rerunnable for exactly that reason - the
+          # pull-request step failed on a missing token permission, and the
+          # retry died on a tag that already existed. Work that stops halfway
+          # has to be resumable, or the only recovery is by hand.
+          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+            echo "::notice::$TAG already exists. Treating this as a re-run and "\
+                 "only making sure the pull request is open."
+          else
+            # `-B` rather than `-b`: a branch left behind by a failed run must
+            # not block the retry either.
+            git checkout -B "$branch"
+            git add CHANGELOG.md about.py
+            git commit -m "Release $TAG"
+            git push origin "$branch"
+
+            # The tag points at *that* commit rather than at `main`, so the
+            # binary built from it reports the version it was released as. A
+            # tag whose about.py still said the old number would put a lie in
+            # the About box, which is the one thing this repository will not
+            # ship.
+            git tag -a "$TAG" -m "Anamorph $VERSION"
+            git push origin "$TAG"
+          fi
 
           # The changelog reaches `main` the way everything else does.
           #
@@ -103,9 +120,13 @@ jobs:
           # A step that reports success when its work did not happen is worse
           # than one that fails.
           #
-          # If it fails with a permissions error, the repository setting
-          # "Allow GitHub Actions to create and approve pull requests"
-          # (Settings -> Actions -> General) is off. It is off by default.
+          # `Resource not accessible by personal access token` means
+          # RELEASE_TOKEN is missing `Pull requests: Read and write`. The
+          # repository setting "Allow GitHub Actions to create and approve
+          # pull requests" does not cover this: that governs `GITHUB_TOKEN`,
+          # and once a PAT is configured `gh` authenticates as the PAT.
+          # `Resource not accessible by integration` is the other one, and
+          # means the opposite - no PAT, and that setting is off.
           if gh pr view "$branch" --json number >/dev/null 2>&1; then
             echo "::notice::A pull request for $branch already exists."
           else
