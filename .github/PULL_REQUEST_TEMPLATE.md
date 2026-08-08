@@ -14,6 +14,6 @@ editor and the projected output compared against each other. -->
 ## Licensing
 
 - [x] Every commit is signed off (`git commit -s`) under the [DCO](../CONTRIBUTING.md#sign-your-work--the-dco)
-- [x] New `.py` files carry the `SPDX-License-Identifier: GPL-3.0-or-later` header
-- [x] I have the right to submit this code under GPL-3.0-or-later, and no part
+- [x] New `.py` files carry the `SPDX-License-Identifier: GPL-3.0-only` header
+- [x] I have the right to submit this code under GPL-3.0-only, and no part
       of it is copied from a source under incompatible terms
