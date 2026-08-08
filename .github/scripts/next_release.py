@@ -248,11 +248,19 @@ def render(version: str, sections: dict, when: Optional[str] = None) -> str:
 
 
 def prepend(entry: str) -> None:
-    """Newest first, under the header, leaving older entries untouched."""
+    """Newest first, under the header, leaving older entries untouched.
+
+    The blank line before the older entries is not cosmetic. `lstrip` removes
+    the newline that used to separate them, and a heading with no blank line
+    above it sits directly under the previous release's last bullet - which
+    the first real run produced, jamming `## [0.1.0]` onto the end of 0.2.0.
+    Markdown mostly forgives it; the file stops being readable as text, and
+    each release makes it worse.
+    """
     text = CHANGELOG.read_text(encoding="utf-8")
     marker = "<!-- releases -->"
     head, _, tail = text.partition(marker)
-    CHANGELOG.write_text(f"{head}{marker}\n\n{entry}{tail.lstrip()}", encoding="utf-8")
+    CHANGELOG.write_text(f"{head}{marker}\n\n{entry}\n{tail.lstrip()}", encoding="utf-8")
 
 
 def emit(name: str, value: str) -> None:
