@@ -3,9 +3,25 @@ name: Version
 # Every merge to `main` is a candidate release. The tag this pushes is what
 # `release.yml` builds from, so the two stay separate: this one decides what
 # the version is, that one produces the artifacts.
+#
+# Except when nothing a user could see has changed. v0.2.2 was cut for a merge
+# that touched only this directory: three platform builds, a tag, a release
+# and a notification, delivering an application byte-for-byte identical to
+# v0.2.1. A version number is a promise that something changed for whoever
+# downloads it, and that one was empty.
+#
+# Only `.github/**` is listed. `packaging/**` deliberately is not - the spec
+# decides what goes inside the binary, so changing it changes what people
+# receive. `tests/**` is not either: a merge of tests alone is rare, and one
+# spare version costs less than a rule too subtle to predict.
+#
+# GitHub skips the run only when *every* changed file matches, so a merge that
+# touches CI alongside real work still cuts a release.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '.github/**'
 
 permissions:
   contents: read
