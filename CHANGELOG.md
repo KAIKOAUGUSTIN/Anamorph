@@ -38,6 +38,7 @@ will be made deliberately rather than reached by accident.
 
 ### Security
 - Continuous integration checks now enforce binary-only dependency installations to prevent running untrusted setup scripts.
+
 ## [0.1.0] - 2026-08-08
 
 The first tagged build, and the first one anyone can run without installing
