@@ -45,8 +45,13 @@ runs:
           xvfb libgl1-mesa-dri libglx-mesa0
 
     - name: Install dependencies
+      # `--only-binary :all:` refuses source distributions, and with them the
+      # arbitrary `setup.py` a compromised release could run inside CI. Every
+      # dependency here publishes wheels, so the flag costs nothing and the
+      # install fails loudly rather than quietly building from source the day
+      # one of them stops.
       shell: bash
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install "pytest>=7"
+        pip install --only-binary :all: -r requirements.txt
+        pip install --only-binary :all: "pytest>=7"
