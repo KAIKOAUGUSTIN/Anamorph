@@ -18,6 +18,12 @@ will be made deliberately rather than reached by accident.
 
 <!-- releases -->
 
+## [0.2.2] - 2026-08-08
+
+### Fixed
+- Release notes now keep a blank line between version sections so the file stays readable in a terminal.
+- The release process can now be safely re-run after a partial failure without creating duplicate commits or getting stuck.
+
 ## [0.2.1] - 2026-08-08
 
 ### Fixed
