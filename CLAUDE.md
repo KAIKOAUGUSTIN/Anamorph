@@ -471,6 +471,7 @@ pytest
 - `tests/test_playback.py` - the show clock, decoder sharing, loop/offset/rate, the transport bar
 - `tests/test_showtime.py` - blackout, missing-media detection, relinking, the undo gaps
 - `tests/test_problems.py` - the problem log, the real call sites reaching it, and that the help sheet's keys are bound
+- `tests/test_ci_report.py` - the failure reporter itself: that it finds the failing line rather than the `def`, and says something when pytest died before writing a report
 - `tests/test_app_paths.py` - the session surviving the rename: carried across, original left alone, current work never overwritten
 - `tests/test_licensing.py` - the SPDX header on every tracked `.py`, a notice for every dependency, the DCO quoted in full, and the About box carrying the notices the GPL asks for
 - `tests/test_render_gl.py` - **pixels**: what actually lands on the projector
@@ -489,19 +490,32 @@ letterboxing, the output pass (region crop, blend ramp, colour), the four
 blend modes and the blackout. Each one was verified to fail when its fix is
 reverted.
 
-CI runs **one job per test file**, so a red tick in the checks list names the
-area instead of saying "the suite". The list is discovered from the repository
-by a `discover` job rather than written into the workflow, so a new suite
-cannot be silently left out of CI, and `fail-fast: false` keeps one red suite
-from cancelling the rest.
+CI runs **one job per operating system**, not per test file. Splitting by
+file briefly gave 25 jobs, and that does not survive a second platform - 25
+suites times three systems is 75 jobs for one push. It was also the weaker
+signal: a job named `masks` tells you the area, while an annotation tells you
+the file, the test, the line and the assertion, on the diff itself.
 
-Three jobs sit alongside the matrix: `whole suite (no path argument)`, which
-runs bare `pytest` because that is a *different* `sys.path` setup from
-`pytest tests/test_x.py` and the suite once passed one way while failing to
-import the other; and `render_gl (OpenGL)` under xvfb+Mesa, which also fails
-if those tests *skip* - a skipped pixel suite is a green tick that proves
-nothing. The shared install lives in `.github/actions/setup`, since copying it
-into two dozen jobs is how it drifts.
+`.github/scripts/test_report.py` turns pytest's JUnit report into `::error`
+annotations plus a table in the job summary. Neither needs write permission
+on the repository, which is why it is not a PR comment: on a pull request
+from a fork the token is read-only, so a commenting bot fails precisely on
+outside contributions. The annotation's line comes from the *last frame of
+the traceback*, not from the testcase's `file`/`line` attributes - those
+point at the `def`, which can be far from the assertion that failed. The
+attributes are the fallback, and `pytest.ini` sets `junit_family = xunit1`
+because the default `xunit2` drops them entirely.
+
+The matrix carries `ubuntu-latest` today; `windows-latest` and `macos-latest`
+are one line away and have never been run, so they need a shakedown first.
+`fail-fast: false` is what makes "does this break on Windows only?" answerable.
+
+Two more jobs: a step inside the matrix job runs one suite *by path*, because
+that is a different `sys.path` setup from bare `pytest` and the suite once
+passed one way while failing to import the other; and `render_gl (OpenGL)`
+runs under xvfb+Mesa and fails if those tests *skip* - a skipped pixel suite
+is a green tick that proves nothing. The shared install lives in
+`.github/actions/setup`, and skips its apt steps off Linux.
 
 `pytest.ini` sets `pythonpath = .`, because the repo is not installed as a
 package and its modules are therefore only importable when the repo root is on
