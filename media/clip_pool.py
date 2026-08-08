@@ -259,9 +259,19 @@ class ClipPool:
             return clip
 
     def reap_idle(self, timeout: float = IDLE_TIMEOUT_SECONDS) -> int:
-        """Close decoders nobody has asked about. Returns how many went."""
+        """Close decoders idle for at least `timeout`. Returns how many went.
+
+        The comparison is `>=`, and that is not a detail. With `>` the
+        boundary depends on the clock's resolution: `time.monotonic()` counts
+        in nanoseconds on Linux and macOS, so a decoder opened and reaped in
+        the same breath has always aged *something* - but Windows ticks about
+        every 15ms, so the elapsed time comes back as exactly 0.0 and `>`
+        rejects it. The same call reaped on two platforms and not on the
+        third. "Idle for at least this long" is also what a timeout means
+        everywhere else.
+        """
         with self._lock:
-            stale = [key for key, clip in self._clips.items() if clip.idle_for() > timeout]
+            stale = [key for key, clip in self._clips.items() if clip.idle_for() >= timeout]
             clips = [self._clips.pop(key) for key in stale]
         for clip in clips:
             clip.stop()

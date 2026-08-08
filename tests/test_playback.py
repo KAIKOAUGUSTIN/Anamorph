@@ -382,6 +382,47 @@ def test_idle_decoders_are_reaped(clip_file):
         pool.stop_all()
 
 
+class _ClipIdleFor:
+    """A stand-in whose idle time is exact.
+
+    The real `Clip` reads `time.monotonic()`, and that clock's resolution is
+    the whole problem: nanoseconds on Linux and macOS, ~15ms on Windows. A
+    test built on real elapsed time cannot state where the boundary is, which
+    is why the off-by-one in `reap_idle` survived until a Windows runner
+    happened to look. This one names the idle time instead of racing for it.
+    """
+
+    def __init__(self, idle: float) -> None:
+        self._idle = idle
+        self.stopped = False
+
+    def idle_for(self) -> float:
+        return self._idle
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def test_a_clip_idle_for_exactly_the_timeout_is_reaped():
+    """`>` here means a decoder is kept on a coarse clock and dropped on a
+    fine one - the same call behaving differently per platform."""
+    pool = ClipPool()
+    clip = _ClipIdleFor(5.0)
+    pool._clips[("exactly-at-the-boundary",)] = clip
+
+    assert pool.reap_idle(timeout=5.0) == 1
+    assert clip.stopped and len(pool) == 0
+
+
+def test_a_clip_idle_for_less_than_the_timeout_stays():
+    pool = ClipPool()
+    clip = _ClipIdleFor(4.999)
+    pool._clips[("still-warm",)] = clip
+
+    assert pool.reap_idle(timeout=5.0) == 0
+    assert not clip.stopped and len(pool) == 1
+
+
 def test_a_clip_still_being_watched_is_not_reaped(clip_file):
     pool = ClipPool()
     try:
