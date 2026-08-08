@@ -200,3 +200,21 @@ def test_nothing_since_the_last_tag_is_not_a_release(release, monkeypatch, capsy
 
     assert release.main() == 0
     assert "release=no" in capsys.readouterr().out
+
+
+def test_a_new_entry_does_not_jam_into_the_previous_one(release, tmp_path, monkeypatch):
+    """The first real release wrote `## [0.1.0]` directly under 0.2.0's last
+    bullet, with no blank line. Markdown mostly forgives it and the file stops
+    being readable as text - and every release after makes it worse."""
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(
+        "# Changelog\n\n<!-- releases -->\n\n## [0.1.0] - 2026-01-01\n\n### Added\n- a thing\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(release, "CHANGELOG", changelog)
+
+    release.prepend(release.render("0.2.0", {"Fixed": ["a bug"]}, when="2026-02-02"))
+
+    text = changelog.read_text(encoding="utf-8")
+    assert "\n\n## [0.1.0]" in text, "the older entry lost the blank line above it"
+    assert text.index("## [0.2.0]") < text.index("## [0.1.0]"), "newest first"
