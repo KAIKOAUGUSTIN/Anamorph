@@ -18,6 +18,12 @@ will be made deliberately rather than reached by accident.
 
 <!-- releases -->
 
+## [0.2.1] - 2026-08-08
+
+### Fixed
+- Release builds now start automatically instead of silently skipping the build process
+- The release job now fails loudly instead of reporting success when a pull request cannot be opened
+- The release job now warns clearly when a build must be started manually due to missing automation tokens
 ## [0.2.0] - 2026-08-08
 
 ### Added

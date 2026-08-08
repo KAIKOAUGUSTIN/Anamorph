@@ -18,7 +18,7 @@ same values the About box shows.
 from __future__ import annotations
 
 APP_NAME = "Anamorph"
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 # QStandardPaths builds AppDataLocation out of these two, which is why they
 # are set at all: without them the session copy lands in a folder named after
