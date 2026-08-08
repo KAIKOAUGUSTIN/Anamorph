@@ -18,6 +18,25 @@ will be made deliberately rather than reached by accident.
 
 <!-- releases -->
 
+## [0.3.0] - 2026-08-08
+
+### Added
+- Downloadable application bundles for Windows, macOS, and Linux that run without requiring a Python installation
+- Application icon showing a dashed square and a pinned quad, visible in the window, taskbar, and dock
+- Download links and first-time setup instructions for unsigned builds in the README
+
+### Changed
+- Project license is now strictly GPL-3.0-only, no longer permitting automatic upgrades to future GPL versions
+- Qt libraries are included as separate files beside the executable, allowing users to replace them to comply with LGPL requirements
+- Continuous integration tests now run on Windows and macOS in addition to Linux
+
+### Fixed
+- Video decoders are now correctly reaped on Windows after being idle, fixing a timing discrepancy that only surfaced on higher-latency systems
+- Test failure annotations now correctly link to the exact file and line on Windows paths
+
+### Security
+- Continuous integration dependencies are now installed strictly from pre-built wheels, preventing the execution of untrusted setup scripts
+
 ## [0.2.2] - 2026-08-08
 
 ### Fixed
