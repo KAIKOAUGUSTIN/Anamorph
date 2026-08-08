@@ -406,6 +406,14 @@ quietly regressed. `.github/workflows/release.yml` builds on a `v*` tag,
 build that produces an app), checks the licence texts are inside, and attaches
 the archives to a draft release.
 
+**The tag is pushed by hand.** There used to be a second workflow that read
+every merge to `main`, asked a model whether it was a fix or a feature, wrote
+the changelog and minted the tag itself. It is gone, and should not come back
+without a decision to bring it back: it cut `v0.2.2` for a CI-only merge, and
+the repair for that was a `paths-ignore` list guessing at which directories a
+user can see. That list has no end, and every entry on it is a place the
+automation can be quietly wrong. `CONTRIBUTING.md` has the four manual steps.
+
 Nothing is signed. Windows SmartScreen and macOS Gatekeeper will warn, and
 macOS notarisation needs a paid Apple Developer account - the one part of this
 that money, not code, unblocks.
