@@ -1,0 +1,71 @@
+name: Version
+
+# Every merge to `main` is a candidate release. The tag this pushes is what
+# `release.yml` builds from, so the two stay separate: this one decides what
+# the version is, that one produces the artifacts.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    # The job pushes a commit to `main`, which would arrive back here as
+    # another push. GitHub does not re-trigger for a token-authored push by
+    # default, and the subject check makes that independent of the setting.
+    if: "!startsWith(github.event.head_commit.message, 'Release v')"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history: the script finds the previous tag and reads
+          # every commit since it, and a shallow clone has neither.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Decide the version and write the changelog
+        id: decide
+        env:
+          # Absent secrets disable the call rather than fail it, so a fork or
+          # a repository without the key still cuts releases from markers.
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: python .github/scripts/next_release.py
+
+      - name: Commit the changelog and tag it
+        if: steps.decide.outputs.release == 'yes'
+        env:
+          TAG: ${{ steps.decide.outputs.tag }}
+          VERSION: ${{ steps.decide.outputs.version }}
+        run: |
+          git config user.name "Kaio Augusto"
+          git config user.email "114446391+KAIKOAUGUSTIN@users.noreply.github.com"
+          git add CHANGELOG.md about.py
+          git commit -m "Release $TAG"
+          # The tag points at the commit that carries the matching VERSION, so
+          # a build made from the tag reports the version it was released as.
+          git tag -a "$TAG" -m "Anamorph $VERSION"
+          git push origin HEAD:main
+          git push origin "$TAG"
+
+      - name: Say what happened
+        if: always()
+        run: |
+          {
+            echo "## Version"
+            if [ "${{ steps.decide.outputs.release }}" = "yes" ]; then
+              echo "Tagged **${{ steps.decide.outputs.tag }}** "
+              echo "(\`${{ steps.decide.outputs.bump }}\` bump). "
+              echo "\`release.yml\` is building it now."
+            else
+              echo "Nothing to release: no commits since the last tag."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

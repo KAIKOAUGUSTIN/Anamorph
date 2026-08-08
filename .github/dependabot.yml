@@ -5,7 +5,7 @@ updates:
   # ATIVO
   # ===========================================================================
 
-  # Python — requirements.txt na raiz
+  # Python - requirements.txt na raiz
   - package-ecosystem: "pip"
     directory: "/"
     schedule:

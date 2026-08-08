@@ -1,15 +1,16 @@
 # Anamorph - projection mapping
 # Copyright (C) 2026 Kaio Augusto
 #
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0-only
 
 from __future__ import annotations
 
 import sys
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
 from about import APP_NAME, ORGANIZATION, VERSION
-from app_paths import remember_legacy_app_data
+from app_paths import asset_path, remember_legacy_app_data
 from ui.main_window import MainWindow
 from ui.styles import STUDIO_DARK_QSS
 
@@ -34,6 +35,12 @@ def run() -> None:
     app.setOrganizationName(ORGANIZATION)
     app.setApplicationDisplayName(APP_NAME)
     app.setApplicationVersion(VERSION)
+
+    # The window and taskbar mark. Set here rather than per window, so
+    # every projection window and dialog inherits it.
+    icon = asset_path("icon.png")
+    if icon.exists():
+        app.setWindowIcon(QIcon(str(icon)))
 
     # Apply the Studio Dark Luxury stylesheet
     app.setStyleSheet(STUDIO_DARK_QSS)

@@ -325,7 +325,7 @@ a shape's name travels with the shape.
 
 ### Licensing
 
-**GPL-3.0-or-later**, and the repository is built so it stays that way without
+**GPL-3.0-only**, and the repository is built so it stays that way without
 anyone having to remember.
 
 `about.py` is the single source: name, version, copyright, the SPDX
