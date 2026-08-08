@@ -18,6 +18,26 @@ will be made deliberately rather than reached by accident.
 
 <!-- releases -->
 
+## [0.2.0] - 2026-08-08
+
+### Added
+- Downloadable application bundles for Windows, macOS, and Linux that run without installing Python or dependencies.
+- Application window and file icons showing the projection mapping corner-pin concept.
+- About box displaying the application's name, version, copyright, and licence information.
+- Automatic migration of your unsaved session work to the new Anamorph application data folder when launching the renamed app for the first time.
+- README providing first-time setup instructions, including how to bypass unsigned build warnings on each operating system.
+
+### Changed
+- Application licence is now strictly GPL-3.0-only.
+- macOS builds are restricted to Apple Silicon.
+- Unsaved session files are now stored in a folder named Anamorph instead of a generic interpreter folder.
+
+### Fixed
+- Video clips no longer close immediately on Windows when checking for idle timeouts.
+- Failure annotations in pull requests now correctly point to the exact failing line of code instead of floating at the top of the run.
+
+### Security
+- Continuous integration checks now enforce binary-only dependency installations to prevent running untrusted setup scripts.
 ## [0.1.0] - 2026-08-08
 
 The first tagged build, and the first one anyone can run without installing
