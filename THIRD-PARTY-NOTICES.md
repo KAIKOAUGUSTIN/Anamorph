@@ -10,10 +10,10 @@ file — and each dependency's own licence text — must ship with it.
 
 | Component | Version | Licence | Notes |
 |---|---|---|---|
-| [PySide6 / Qt](https://www.qt.io/qt-for-python) | 6.11.1 | LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only | Used under the **LGPL-3.0** option. See below. |
+| [PySide6-Essentials / Qt](https://www.qt.io/qt-for-python) | 6.11.1 | LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only | Used under the **LGPL-3.0** option. See below. Essentials only — the Addons wheel is never imported and never shipped. |
 | [shiboken6](https://www.qt.io/qt-for-python) | 6.11.1 | LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only | Binding runtime for PySide6; same terms. |
 | [NumPy](https://numpy.org/) | 2.5.1 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | |
-| [OpenCV (opencv-python)](https://opencv.org/) | 4.9+ | Apache-2.0 | See the note on bundled codecs. |
+| [OpenCV (opencv-python-headless)](https://opencv.org/) | 4.9+ | Apache-2.0 | Headless build — no GUI toolkit. See the note on bundled codecs. |
 | [Pillow](https://python-pillow.org/) | 12.3.0 | MIT-CMU (HPND) | |
 | [PyOpenGL](https://pyopengl.sourceforge.net/) | 3.1.10 | BSD-3-Clause | |
 | [mapbox_earcut](https://github.com/skogler/mapbox_earcut_python) | 2.0.0 | ISC | Polygon triangulation, including holes. |
