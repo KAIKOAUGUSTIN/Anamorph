@@ -55,13 +55,25 @@ def locate(case: ET.Element, traceback: str) -> Tuple[str, int]:
     frames = TRACEBACK_LOCATION.findall(traceback or "")
     if frames:
         path, line = frames[-1]
-        return path, int(line)
+        return _repo_path(path), int(line)
 
     path = case.get("file") or _path_from_classname(case.get("classname"))
     # xunit1 counts test definitions from zero; GitHub counts lines from one,
     # and an annotation one line off lands on a decorator or a blank line.
     line = case.get("line")
-    return path, int(line) + 1 if line is not None else 1
+    return _repo_path(path), int(line) + 1 if line is not None else 1
+
+
+def _repo_path(path: str) -> str:
+    """A path GitHub can match against the diff.
+
+    The Windows runner reports `tests\\test_playback.py`, and GitHub matches
+    annotation paths with forward slashes - so a backslash path is not
+    rejected, it is silently unmatched: the annotation detaches from the file
+    and floats at the top of the run, which is the state this whole script
+    exists to avoid.
+    """
+    return (path or "").replace("\\", "/")
 
 
 def _path_from_classname(classname: Optional[str]) -> str:

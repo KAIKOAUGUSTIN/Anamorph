@@ -506,9 +506,27 @@ point at the `def`, which can be far from the assertion that failed. The
 attributes are the fallback, and `pytest.ini` sets `junit_family = xunit1`
 because the default `xunit2` drops them entirely.
 
-The matrix carries `ubuntu-latest` today; `windows-latest` and `macos-latest`
-are one line away and have never been run, so they need a shakedown first.
-`fail-fast: false` is what makes "does this break on Windows only?" answerable.
+The matrix carries `ubuntu-latest`, `windows-latest` and `macos-latest`, and
+`fail-fast: false` is what makes "does this break on Windows only?"
+answerable. It did, on the first run: `reap_idle` compared `idle_for() >
+timeout`, and `time.monotonic()` ticks about every 15ms on Windows against
+nanoseconds elsewhere, so a decoder opened and reaped in the same breath aged
+exactly 0.0 there and the reap was refused. macOS and Linux had agreed with
+each other for months about a boundary that was wrong.
+
+The lesson is in how it was fixed, not what it was: the guard tests
+(`test_a_clip_idle_for_exactly_the_timeout_is_reaped`) name the idle time
+through a stand-in instead of racing a real clock. A test built on elapsed
+time cannot state where a boundary is - it can only report where this
+machine's clock happened to land - which is why the off-by-one survived until
+a runner with a coarse clock looked at it.
+
+The annotation path is normalised through `_repo_path` for the same reason.
+The Windows runner writes `tests\test_playback.py` in the traceback, and
+GitHub does not reject a backslash path - it silently fails to match it, so
+the annotation detaches from the file and floats at the top of the run. A
+reporter that quietly stops pointing anywhere is worse than none, since the
+step still passes.
 
 Two more jobs: a step inside the matrix job runs one suite *by path*, because
 that is a different `sys.path` setup from bare `pytest` and the suite once
