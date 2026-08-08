@@ -10,6 +10,15 @@ on:
 permissions:
   contents: read
 
+# One at a time, and never cancelled. Two merges landing close together would
+# otherwise have both runs read the same last tag, compute the same next
+# version, and race to claim it - the loser failing on a tag that already
+# exists, or on a branch that moved under it. Queuing costs a minute; getting
+# it wrong costs a version number that means nothing.
+concurrency:
+  group: version
+  cancel-in-progress: false
+
 jobs:
   tag:
     # The job pushes a commit to `main`, which would arrive back here as
@@ -18,7 +27,10 @@ jobs:
     if: "!startsWith(github.event.head_commit.message, 'Release v')"
     runs-on: ubuntu-latest
     permissions:
+      # `contents` pushes the release branch and the tag; `pull-requests`
+      # opens the one that carries the changelog back to `main`.
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,21 +52,44 @@ jobs:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: python .github/scripts/next_release.py
 
-      - name: Commit the changelog and tag it
+      - name: Tag it, and propose the changelog
         if: steps.decide.outputs.release == 'yes'
         env:
           TAG: ${{ steps.decide.outputs.tag }}
           VERSION: ${{ steps.decide.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "Kaio Augusto"
           git config user.email "114446391+KAIKOAUGUSTIN@users.noreply.github.com"
+
+          # `main` is protected, and rightly so: it requires a pull request and
+          # seven passing checks. Pushing the release commit straight at it was
+          # the original design and the ruleset refused it, which was the
+          # ruleset doing its job. So the commit goes to a branch of its own.
+          branch="release/$TAG"
+          # `-B` rather than `-b`: a previous run that got this far and then
+          # failed would otherwise leave a branch name that blocks the retry.
+          git checkout -B "$branch"
           git add CHANGELOG.md about.py
           git commit -m "Release $TAG"
-          # The tag points at the commit that carries the matching VERSION, so
-          # a build made from the tag reports the version it was released as.
+          git push origin "$branch"
+
+          # The tag points at *that* commit rather than at `main`, so the
+          # binary built from it reports the version it was released as. A tag
+          # whose about.py still said the old number would put a lie in the
+          # About box, which is the one thing this repository will not ship.
           git tag -a "$TAG" -m "Anamorph $VERSION"
-          git push origin HEAD:main
           git push origin "$TAG"
+
+          # The changelog reaches `main` the way everything else does. The
+          # release is already building by now; this is bookkeeping catching up.
+          gh pr create --base main --head "$branch" \
+            --title "Release $TAG" \
+            --body "Changelog and version bump for \`$TAG\`.
+
+          The tag is already pushed and \`release.yml\` is building it. Merging
+          this brings \`CHANGELOG.md\` and \`about.VERSION\` onto \`main\`." \
+            || echo "::notice::A pull request for $branch already exists."
 
       - name: Say what happened
         if: always()
