@@ -3,7 +3,7 @@
 # wheel the meta-package would also pull is 438 MB of things this app never
 # touches, 195 MB of which is a whole Chromium inside QtWebEngineCore.
 PySide6-Essentials>=6.11.1
-numpy>=2.5.1
+numpy>=2.5.2
 # Headless: the app uses VideoCapture, VideoWriter and cvtColor and never
 # opens an OpenCV window, so the GUI build's GTK stack is dead weight in
 # the bundle - and one more toolkit whose licence would have to be tracked.
