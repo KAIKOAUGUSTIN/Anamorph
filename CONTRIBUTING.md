@@ -1,7 +1,7 @@
 # Contributing to Anamorph
 
-Anamorph is free software under the **GNU General Public License, version 3 or
-later**. Contributions come in under those same terms, and stay there - this
+Anamorph is free software under the **GNU General Public License, version 3**.
+Contributions come in under those same terms, and stay there - this
 project is not going to be closed later, and the contribution process is built
 on that promise rather than on a document that reserves the right to break it.
 
@@ -136,13 +136,48 @@ be a directory. GitHub will happily create both on the server, and then every
 convention is not cosmetic; it is the only one that coexists with a branch
 called `dev`.
 
+## Cutting a release
+
+By hand, in four steps, and only when someone decides a release should exist.
+
+1. Merge `dev` into `main`.
+2. Write the entry at the top of `CHANGELOG.md` and set `VERSION` in
+   `about.py` to the same number. The tag is built from that commit, so a
+   binary always reports the version it was released as - an About box saying
+   the previous number is the one thing this repository will not ship.
+3. Tag it and push the tag:
+
+   ```bash
+   git tag -a v0.3.0 -m "Anamorph 0.3.0"
+   git push origin v0.3.0
+   ```
+
+4. `release.yml` picks the tag up, builds Windows, macOS and Linux, checks the
+   bundle actually starts, and attaches the archives to a **draft** release.
+   Read it, then publish it.
+
+This used to be automatic: a script classified every merge to `main`, asked a
+model whether it was a fix or a feature, wrote the changelog and pushed the tag
+itself. It worked. It was removed anyway, and the reason is worth keeping.
+
+A version number is a promise to whoever downloads the build, and the machine
+had no way to know whether a promise was warranted. It cut `v0.2.2` for a merge
+that touched only CI - three platform builds and a release delivering an
+application byte-for-byte identical to `v0.2.1`. The fix for that was a
+`paths-ignore` rule, which is to say: a second rule, guessing at which
+directories a user can see. There is no end to that list, and every entry on it
+is a place where the automation can be quietly wrong for months.
+
+Releases here happen a few times a year. Four steps, a few times a year, is
+cheaper than a system nobody can predict.
+
 ## Before you open a pull request
 
 ```bash
 pytest
 ```
 
-637 tests, all offscreen. The rendering tests need a real OpenGL context and
+670 tests, all offscreen. The rendering tests need a real OpenGL context and
 skip without one; to run those for real:
 
 ```bash

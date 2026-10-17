@@ -4,13 +4,17 @@ Every release, newest first. The format is
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the version
 numbers follow [Semantic Versioning](https://semver.org/).
 
-Entries are written by `.github/scripts/next_release.py` when a change reaches
-`main`, so the shape is the same in every release rather than depending on who
-cut it. What decides the number is the marker in the commits: `feat:` for a
-new capability, `fix:` for a repair, and `!` or a `BREAKING CHANGE:` trailer
-when something that used to work stops working. Where nobody said, a model
-reads the commits and proposes, and its reasoning is printed in the job that
-made the call.
+Entries are written by hand when a release is cut, and the number is chosen by
+hand too. That used to be automated - a script read the commits, asked a model
+to classify them, and pushed a tag on every merge to `main`. It worked, and it
+was still the wrong trade: a version number is a promise to whoever downloads
+the build, and nothing that guesses should be allowed to make one. Cutting a
+release is rare enough that doing it deliberately costs almost nothing.
+
+Each bullet is one user-visible outcome, written for someone operating a
+projector rather than for someone reading the diff. Sections appear in the
+order Keep a Changelog gives them - Added, Changed, Deprecated, Removed, Fixed,
+Security - and empty ones are left out.
 
 While the version stays below `1.0.0`, a breaking change raises the minor
 number rather than the major one. `1.0.0` is a promise about stability, and it
