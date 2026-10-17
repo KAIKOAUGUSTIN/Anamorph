@@ -18,6 +18,90 @@ will be made deliberately rather than reached by accident.
 
 <!-- releases -->
 
+## [0.2.3] - 2026-10-17
+
+### Changed
+- chore(deps)(deps): update pyside6-essentials requirement
+- Add test and release badges to README
+- Add test and release badges to README
+- Merge branch 'main' into the release branch
+- Do not cut a release when only CI changed
+- Do not cut a release when only CI changed
+- Merge branch 'main' into feature/resumable-release
+- Keep a blank line between changelog entries
+- Keep a blank line between changelog entries
+- Make the release job survive being re-run
+- Make the release job survive being re-run
+- Merge branch 'dev' into the release branch
+- Stop the release job reporting success for work that did not happen
+- Stop the release job reporting success for work that did not happen
+- Serialise the version job, so two merges cannot race for one number
+- Serialise the version job, so two merges cannot race for one number
+- Let the release tag itself without punching through branch protection
+- Let the release tag itself without punching through branch protection
+- Let the release script be tried before it is trusted
+- Let the release script be tried before it is trusted
+- Decide the version on merge, and write the changelog the same way every time
+- Decide the version on merge, and write the changelog the same way every time
+- GPL-3.0-only, an icon, and a README that points at the download
+- GPL-3.0-only, an icon, and a README that points at the download
+- chore(deps)(deps): update opencv-python-headless requirement
+- chore(deps)(deps): update opencv-python-headless requirement
+- Check the bundle starts in a way macOS can run
+- Check the bundle starts in a way macOS can run
+- Package it: a bundle someone can download, and still relink Qt in
+- Package it: a bundle someone can download, and still relink Qt in
+- Take the four SonarQube findings that were real
+- Take the four SonarQube findings that were real
+- Potential fix for code scanning alert no. 1: Workflow does not contain permissions
+- Potential fix for code scanning alert no. 1: Workflow does not contain permissions
+- Potential fix for code scanning alert no. 2: Workflow does not contain permissions
+- Potential fix for code scanning alert no. 2: Workflow does not contain permissions
+- Write down the branching model, and let CI see the integration branch
+- Write down the branching model, and let CI see the integration branch
+- Fix the two failures the Windows runner found on its first run
+- Fix the two failures the Windows runner found on its first run
+- Add Windows and macOS to CI test matrix
+- Update PULL_REQUEST_TEMPLATE.md
+- one job per platform, and annotate the failure instead of naming a job
+- Flatten the layout, name the app, and split CI one job per suite
+- Nail the licence down: SPDX headers, an About box, and the DCO
+- Hand it to someone else: a README, one language, and errors you can see
+- Make `pm` importable however pytest is invoked
+- blackout, missing media, relinking, and pixel tests in CI
+- Media playback: a show clock, shared decoders and real blend modes
+- portable projects, crash recovery, output preview, real render tests
+- Fix fourteen bugs found using the app
+- Group surfaces so they move as one
+- Per-surface masks: the regions a projector must not light
+- Bezier edges: polygons with sides that curve
+- Deformation mesh: surfaces that bend between their corners
+- Retire per-screen workspaces; add the outputs dialog
+- One canvas, many projectors: keystone, colour and edge blending
+- Give the scale and rotate gestures something to look at
+- Delete the handle machinery the gesture rewrite orphaned
+- Separate input space from output space
+- Retire the edit modes: drag to move, Alt to rotate, Ctrl to scale
+- Stop losing work: confirm discards, register opened projects, fix playback
+- Make the editor and the projector agree on how media is fitted
+- Add GNU GPL v3 license file
+- Undo/redo, vertex snapping, typed coordinates, real test patterns
+- Corner pin: perspective-correct media warp, plus render-path fixes
+- chore(deps)(deps): update pyopengl requirement from >=3.1 to >=3.1.10
+- chore(deps)(deps): update mapbox-earcut requirement
+- chore(deps)(deps): update numpy requirement from >=1.26 to >=2.5.1
+- chore(deps)(deps): update pillow requirement from >=10.0 to >=12.3.0
+- chore(deps)(deps): update pyside6 requirement from >=6.6 to >=6.11.1
+- Set up Dependabot for Python package updates
+- fix sonarqube suggestions
+- fix duplicated code
+- fix sonarqube suggestions
+- Add multi-screen workspace support and OpenGL renderer
+- claude.md
+- claude.md update
+- UI improvements
+- Projection Mapping Files
+
 ## [0.2.2] - 2026-08-08
 
 ### Fixed
