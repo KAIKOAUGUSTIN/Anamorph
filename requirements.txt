@@ -8,7 +8,7 @@ numpy>=2.5.1
 # opens an OpenCV window, so the GUI build's GTK stack is dead weight in
 # the bundle - and one more toolkit whose licence would have to be tracked.
 opencv-python-headless>=5.0.0.93
-mapbox_earcut>=2.0.0
+mapbox_earcut>=2.1.0
 Pillow>=12.3.0
 PyOpenGL>=3.1.10
 
